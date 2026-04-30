@@ -1601,7 +1601,7 @@ ${aiRec ? `
           <div className="trust-positioning">
             <div className="trust-row">
               <div className="trust-label">What this is</div>
-              <div className="trust-text">A thinking tool that translates headcount, square footage, and work style into a defensible space program in under two minutes.</div>
+              <div className="trust-text">A real estate and workplace strategy tool for companies before getting into the details — translating headcount, square footage, and work style into a directional starting point in under two minutes.</div>
             </div>
             <div className="trust-row">
               <div className="trust-label">What it isn't</div>
