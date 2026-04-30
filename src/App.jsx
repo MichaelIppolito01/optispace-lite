@@ -221,6 +221,72 @@ const STYLES_CSS = `
     text-align: left;
   }
 
+  .trust-block {
+    background: #0c0e0f;
+    border: 1px solid #1e2022;
+    border-left: 2px solid #c8b97a;
+    border-radius: 2px;
+    padding: 28px 32px;
+    margin-bottom: 32px;
+    animation: fadeUp 0.5s ease 0.15s both;
+  }
+
+  .trust-line {
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: #c8b97a;
+    line-height: 1.6;
+    margin-bottom: 18px;
+  }
+
+  .trust-divider {
+    height: 1px;
+    background: #1e2022;
+    margin-bottom: 18px;
+  }
+
+  .trust-positioning {
+    display: grid;
+    gap: 14px;
+  }
+
+  .trust-row {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 20px;
+    align-items: baseline;
+  }
+
+  .trust-label {
+    font-family: 'Syne', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #6a6760;
+    line-height: 1.4;
+  }
+
+  .trust-text {
+    font-size: 13px;
+    color: #c0bbb0;
+    line-height: 1.65;
+  }
+
+  @media (max-width: 720px) {
+    .trust-block {
+      padding: 22px 20px;
+    }
+    .trust-row {
+      grid-template-columns: 1fr;
+      gap: 4px;
+    }
+    .trust-label {
+      font-size: 9px;
+    }
+  }
+
   .form-section {
     background: #141618;
     border: 1px solid #252820;
@@ -1525,6 +1591,23 @@ ${aiRec ? `
           <div className="logo">OptiSpace Lite</div>
           <h1 className="headline">Stop guessing your<br />real estate needs.</h1>
           <p className="subhead">Five inputs. A complete space program, scenario analysis, and strategic recommendation. Under 2 minutes.</p>
+        </div>
+
+        <div className="trust-block">
+          <div className="trust-line">
+            Built on 15 years of leading corporate real estate planning across Fortune 500 portfolios.
+          </div>
+          <div className="trust-divider" />
+          <div className="trust-positioning">
+            <div className="trust-row">
+              <div className="trust-label">What this is</div>
+              <div className="trust-text">A thinking tool that translates headcount, square footage, and work style into a defensible space program in under two minutes.</div>
+            </div>
+            <div className="trust-row">
+              <div className="trust-label">What it isn't</div>
+              <div className="trust-text">A substitute for broker engagement, lease economics, or the judgment of someone who actually knows your business.</div>
+            </div>
+          </div>
         </div>
 
         <div className="form-section">
