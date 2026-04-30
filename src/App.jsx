@@ -776,6 +776,97 @@ const STYLES_CSS = `
     text-transform: uppercase;
     color: #6a6760;
     margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .tooltip-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .tooltip-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1px solid #4a4f48;
+    color: #8a8478;
+    font-size: 9px;
+    font-weight: 600;
+    cursor: help;
+    transition: border-color 0.15s, color 0.15s;
+    letter-spacing: 0;
+    text-transform: none;
+    font-family: 'DM Sans', sans-serif;
+    line-height: 1;
+    padding-bottom: 1px;
+  }
+
+  .tooltip-icon:hover,
+  .tooltip-icon:focus {
+    border-color: #c8b97a;
+    color: #c8b97a;
+    outline: none;
+  }
+
+  .tooltip-content {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1a1c1e;
+    border: 1px solid #2e3128;
+    border-radius: 3px;
+    padding: 12px 14px;
+    width: 280px;
+    color: #c0bbb0;
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    line-height: 1.55;
+    font-family: 'DM Sans', sans-serif;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.15s, visibility 0.15s;
+    z-index: 100;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  }
+
+  .tooltip-content::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: #2e3128;
+  }
+
+  .tooltip-wrap:hover .tooltip-content,
+  .tooltip-icon:focus + .tooltip-content {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  @media (max-width: 720px) {
+    .tooltip-content {
+      width: 240px;
+      left: auto;
+      right: -8px;
+      transform: none;
+    }
+    .tooltip-content::after {
+      left: auto;
+      right: 12px;
+      transform: none;
+    }
   }
 
   .metric-value {
@@ -1835,10 +1926,23 @@ ${aiRec ? `
                 { label: "Total SF", value: formatSF(currentProg.totalSF), sub: `${inputs.city}` },
                 { label: "Desk Count", value: formatNum(currentProg.deskCount), sub: inputs.headcount ? `of ${inputs.headcount} headcount` : `~${effectiveHC} estimated capacity` },
                 { label: "Meeting Rooms", value: formatNum(currentProg.meetingRooms), sub: `${currentProg.smallRooms}S · ${currentProg.medRooms}M · ${currentProg.largeRooms}L` },
-                { label: "Annual Cost Est.", value: formatCost(getAnnualCost(currentProg.totalSF, inputs.city)), sub: "occupancy only" }
+                {
+                  label: "Annual Cost Est.",
+                  value: formatCost(getAnnualCost(currentProg.totalSF, inputs.city)),
+                  sub: "base rent only",
+                  tooltip: "Base rent only. Calculated as recommended SF × the city's blended Class A/B asking rate (Q1 2026). Excludes operating expenses, utilities, janitorial, IT, FF&E, tenant improvements, and brokerage fees. Add 30–50% for fully loaded occupancy cost."
+                }
               ].map((m, i) => (
                 <div key={i} className="metric-card">
-                  <div className="metric-label">{m.label}</div>
+                  <div className="metric-label">
+                    {m.label}
+                    {m.tooltip && (
+                      <span className="tooltip-wrap">
+                        <span className="tooltip-icon" tabIndex={0} aria-label="What's included">?</span>
+                        <span className="tooltip-content" role="tooltip">{m.tooltip}</span>
+                      </span>
+                    )}
+                  </div>
                   <div className="metric-value">{m.value}</div>
                   <div className="metric-sub">{m.sub}</div>
                 </div>
