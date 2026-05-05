@@ -5,23 +5,18 @@ import { useState, useCallback } from "react";
 // Cushman & Wakefield MarketBeats Q1 2026, CommercialCafe National Office Report Feb 2026
 // Last updated: April 2026 — rates should be refreshed quarterly
 const COST_PER_SF = {
-  // Tier 1 — Premium gateway markets ($50+)
   "Bay Area (Peninsula/East Bay)": 53,
   "Boston": 50,
   "Miami": 55,
   "New York (Manhattan)": 78,
   "San Francisco": 66,
   "San Jose / Silicon Valley": 55,
-
-  // Tier 2 — Major coastal & growth markets ($40–50)
   "Austin": 46,
   "Los Angeles": 42,
   "Orange County": 40,
-  "San Diego": 42,
+  "San Diego": 45,
   "Seattle": 47,
   "Washington, DC": 46,
-
-  // Tier 3 — Established secondary markets ($30–40)
   "Atlanta": 37,
   "Charlotte": 36,
   "Chicago": 29,
@@ -33,8 +28,6 @@ const COST_PER_SF = {
   "Phoenix": 30,
   "Raleigh-Durham": 30,
   "Tampa": 30,
-
-  // Tier 4 — Affordable major metros ($20–30)
   "Cleveland": 21,
   "Detroit": 22,
   "Indianapolis": 22,
@@ -46,14 +39,69 @@ const COST_PER_SF = {
   "Portland, OR": 28,
   "Salt Lake City": 28,
   "St. Louis": 22,
-
-  // Fallback for cities not on the list — uses national average ($32.79 per CommercialCafe Feb 2026)
-  "Other": 33
+  "Other": 35
 };
 
-// Date stamp shown to user — update when COST_PER_SF table is refreshed
-const COST_DATA_AS_OF = "Q1 2026";
+// Loss factor (RSF/USF ratio) by city — based on BOMA, JLL, and CBRE market tier conventions
+// Tier 1 gateway markets (NYC, SF, Boston, DC): 1.25 — high-rise multi-tenant, large core
+// Tier 2 major coastal/tech (Bay Area, Seattle, LA, San Jose): 1.20
+// Tier 3 standard secondary (San Diego, Austin, Denver, Chicago, Atlanta, Miami): 1.15
+// Tier 4 suburban/efficient (Orange County, Raleigh, Phoenix, Nashville): 1.12
+// Tier 5 affordable major metros (Cleveland, Detroit, Indianapolis, KC, etc.): 1.10
+const LOSS_FACTOR = {
+  // Tier 1 — Premium gateway
+  "New York (Manhattan)": 1.25,
+  "San Francisco": 1.25,
+  "Boston": 1.25,
+  "Washington, DC": 1.25,
 
+  // Tier 2 — Major coastal & tech
+  "Bay Area (Peninsula/East Bay)": 1.20,
+  "San Jose / Silicon Valley": 1.20,
+  "Seattle": 1.20,
+  "Los Angeles": 1.20,
+  "Miami": 1.20,
+  "Chicago": 1.20,
+
+  // Tier 3 — Standard secondary
+  "San Diego": 1.15,
+  "Austin": 1.15,
+  "Denver": 1.15,
+  "Atlanta": 1.15,
+  "Charlotte": 1.15,
+  "Dallas": 1.15,
+  "Houston": 1.15,
+  "Philadelphia": 1.15,
+  "Minneapolis / Twin Cities": 1.15,
+  "Portland, OR": 1.15,
+
+  // Tier 4 — Suburban / efficient
+  "Orange County": 1.12,
+  "Raleigh-Durham": 1.12,
+  "Phoenix": 1.12,
+  "Nashville": 1.12,
+  "Tampa": 1.12,
+  "Salt Lake City": 1.12,
+  "Las Vegas": 1.12,
+  "Orlando": 1.12,
+
+  // Tier 5 — Affordable major metros
+  "Cleveland": 1.10,
+  "Detroit": 1.10,
+  "Indianapolis": 1.10,
+  "Kansas City": 1.10,
+  "Pittsburgh": 1.10,
+  "St. Louis": 1.10,
+
+  "Other": 1.15
+};
+
+function getLossFactor(city) {
+  return LOSS_FACTOR[city] || 1.15;
+}
+
+const COST_DATA_AS_OF = "Q1 2026";
+const COST_VERIFIED_DATE = "May 2026"; // Spot-checked against CBRE, Cushman & Wakefield, Colliers, Avison Young, JLL Q1 2026 reports
 const WORK_STYLES = ["Assigned", "Hybrid", "Mixed", "Hoteling"];
 const MEETING_PREFS = ["Light", "Moderate", "Heavy"];
 const DENSITIES = ["Conservative", "Balanced", "Aggressive"];
@@ -72,7 +120,7 @@ const MEETING_PREF_HINTS = {
 };
 
 function computeProgram(inputs, scenarioStyle, scenarioDensity) {
-  const { headcount, daysInOffice, meetingPref, mixedRatio = 50 } = inputs;
+  const { headcount, daysInOffice, meetingPref, mixedRatio = 50, labUSF = 0 } = inputs;
   const style = scenarioStyle || inputs.workStyle;
   const density = scenarioDensity || "Balanced";
 
@@ -94,241 +142,247 @@ function computeProgram(inputs, scenarioStyle, scenarioDensity) {
   const peakOccupancy = Math.round(headcount * presenceRatio);
   const deskCount = Math.round(headcount * deskRatio * densityMultiplier);
 
-  const meetingMultiplier = meetingPref === "Light" ? 0.08 : meetingPref === "Moderate" ? 0.12 : 0.16;
-  const meetingRooms = Math.round(headcount * meetingMultiplier);
-  const smallRooms = Math.round(meetingRooms * 0.5);
-  const medRooms = Math.round(meetingRooms * 0.35);
-  const largeRooms = meetingRooms - smallRooms - medRooms;
-
+  // === A&R Seats (Assigned & Reservable) ===
   const sfPerDesk = style === "Assigned" ? 150 : style === "Hybrid" ? 130 : style === "Mixed" ? 140 : 110;
   const deskSF = deskCount * sfPerDesk;
-  const meetingSF = (smallRooms * 120) + (medRooms * 250) + (largeRooms * 450);
-  const collabSF = Math.round(deskSF * 0.15);
-  const supportSF = Math.round(deskSF * 0.1);
-  const totalSF = deskSF + meetingSF + collabSF + supportSF;
 
-  return { peakOccupancy, deskCount, meetingRooms, smallRooms, medRooms, largeRooms, deskSF, meetingSF, collabSF, supportSF, totalSF, presenceRatio, deskRatio };
+  // === Conference, Vendor, Collab Rooms ===
+  const meetingMultiplier = meetingPref === "Light" ? 0.08 : meetingPref === "Moderate" ? 0.12 : 0.16;
+  const meetingRooms = Math.round(headcount * meetingMultiplier);
+  const smallRooms = Math.round(meetingRooms * 0.5);   // 4-6 pax
+  const medRooms = Math.round(meetingRooms * 0.35);    // 8-10 pax
+  const largeRooms = meetingRooms - smallRooms - medRooms; // 12-16 pax
+  const phoneBooths = Math.max(2, Math.round(headcount * 0.025)); // 1 per ~40 HC, min 2
+  const collabSeatingAreas = Math.max(1, Math.round(headcount * 0.008)); // open collab zones
+
+  const meetingRoomSF = (smallRooms * 168) + (medRooms * 280) + (largeRooms * 420);
+  const phoneBoothSF = phoneBooths * 20;
+  const collabSeatingSF = collabSeatingAreas * 200;
+  const confCollabSF = meetingRoomSF + phoneBoothSF + collabSeatingSF;
+
+  // === Service Spaces — based on Qualcomm Americas program ratios, scaled to HC ===
+  // These ratios are fixed per HC band, NOT a percent of desk SF — that's the calibration fix
+  const restroomSF = Math.max(650, Math.round(headcount * 6.5));         // ~650 per restroom block, scales w/ HC
+  const mechElecSF = Math.max(240, Math.round(headcount * 2.4));         // mech + elec rooms
+  const copyPrintSF = Math.max(120, Math.round(headcount * 0.8));        // copy room
+  const breakDiningSF = Math.round(headcount * 6 + 200);                  // break room scaling + base
+  const wellnessMothersSF = headcount >= 50 ? 210 : 0;                    // mother's + wellness room (over threshold)
+  const itClosetsSF = Math.max(120, Math.round(headcount * 1.2));        // IDF/MDF closets
+  const storageSF = Math.max(120, Math.round(headcount * 2));            // general storage
+  const serviceSF = restroomSF + mechElecSF + copyPrintSF + breakDiningSF + wellnessMothersSF + itClosetsSF + storageSF;
+
+  // === Lab (passthrough) ===
+  const labSF = Math.max(0, Math.round(labUSF) || 0);
+
+  // === Subtotal of programmed space ===
+  const programSubtotalSF = deskSF + confCollabSF + serviceSF + labSF;
+
+  // === Circulation (33%) and Wall Thickness (3%) — calculated on subtotal ===
+  const circulationSF = Math.round(programSubtotalSF * 0.33);
+  const wallThicknessSF = Math.round(programSubtotalSF * 0.03);
+
+  // === Total Usable SF ===
+  const totalUSF = programSubtotalSF + circulationSF + wallThicknessSF;
+
+  // === Total Rentable SF (per-city loss factor) ===
+  const lossFactor = getLossFactor(inputs.city);
+  const totalRSF = Math.round(totalUSF * lossFactor);
+
+  return {
+    peakOccupancy, deskCount, sfPerDesk,
+    meetingRooms, smallRooms, medRooms, largeRooms, phoneBooths, collabSeatingAreas,
+    deskSF, meetingRoomSF, phoneBoothSF, collabSeatingSF, confCollabSF,
+    restroomSF, mechElecSF, copyPrintSF, breakDiningSF, wellnessMothersSF, itClosetsSF, storageSF, serviceSF,
+    labSF,
+    programSubtotalSF, circulationSF, wallThicknessSF,
+    totalUSF, totalRSF, lossFactor,
+    // Legacy aliases for backward-compat where downstream code used totalSF/collabSF/supportSF
+    totalSF: totalUSF,
+    meetingSF: confCollabSF,
+    collabSF: collabSeatingSF,
+    supportSF: serviceSF,
+    presenceRatio, deskRatio
+  };
 }
 
-// Inverse computation: given target SF, estimate headcount capacity for a given work style
-// Solves the SF equations backwards to find the HC that produces ~targetSF
-function estimateHCFromSF(targetSF, workStyle, meetingPref = "Moderate", density = "Balanced") {
-  // Start with a reasonable bounded search (10 to 5000 people)
-  // Binary-search for the HC that produces totalSF closest to target
-  let low = 10;
-  let high = 5000;
-  let bestHC = low;
-  let bestDiff = Infinity;
+// Naive 1:1 reference program — used as comparison baseline for HC-only mode
+function computeNaiveProgram(inputs) {
+  const naiveInputs = { ...inputs, workStyle: "Assigned" };
+  return computeProgram(naiveInputs, "Assigned", "Balanced");
+}
 
+function estimateHCFromSF(targetRSF, workStyle, meetingPref = "Moderate", density = "Balanced", city = "Other") {
+  // User-entered currentSF is treated as RSF (what they lease).
+  // We binary search for the HC that produces the closest matching totalRSF.
+  let low = 10, high = 5000, bestHC = low, bestDiff = Infinity;
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
-    const trialInputs = { headcount: mid, daysInOffice: 3, meetingPref, mixedRatio: 50, workStyle };
-    const result = computeProgram(trialInputs, workStyle, density);
-    const diff = Math.abs(result.totalSF - targetSF);
-
-    if (diff < bestDiff) {
-      bestDiff = diff;
-      bestHC = mid;
-    }
-
-    if (result.totalSF < targetSF) {
-      low = mid + 1;
-    } else if (result.totalSF > targetSF) {
-      high = mid - 1;
-    } else {
-      return mid;
-    }
+    const trial = { headcount: mid, daysInOffice: 3, meetingPref, mixedRatio: 50, workStyle, labUSF: 0, city };
+    const result = computeProgram(trial, workStyle, density);
+    const diff = Math.abs(result.totalRSF - targetRSF);
+    if (diff < bestDiff) { bestDiff = diff; bestHC = mid; }
+    if (result.totalRSF < targetRSF) low = mid + 1;
+    else if (result.totalRSF > targetRSF) high = mid - 1;
+    else return mid;
   }
   return bestHC;
 }
 
-function computeCapacityFromSF(targetSF, meetingPref = "Moderate") {
+function computeCapacityFromSF(targetRSF, meetingPref = "Moderate", city = "Other") {
   return {
-    Assigned: estimateHCFromSF(targetSF, "Assigned", meetingPref),
-    Hybrid: estimateHCFromSF(targetSF, "Hybrid", meetingPref),
-    Hoteling: estimateHCFromSF(targetSF, "Hoteling", meetingPref)
+    Assigned: estimateHCFromSF(targetRSF, "Assigned", meetingPref, "Balanced", city),
+    Hybrid: estimateHCFromSF(targetRSF, "Hybrid", meetingPref, "Balanced", city),
+    Hoteling: estimateHCFromSF(targetRSF, "Hoteling", meetingPref, "Balanced", city)
   };
 }
 
-function getAnnualCost(sf, city) {
-  return sf * (COST_PER_SF[city] || 33);
-}
-
+function getAnnualCost(sf, city) { return sf * (COST_PER_SF[city] || 35); }
 function formatNum(n) { return n?.toLocaleString() ?? "—"; }
 function formatSF(n) { return `${formatNum(n)} SF`; }
 function formatCost(n) { return `$${(n / 1000).toFixed(0)}K`; }
+// Larger, more readable formatter: switches to $X.XXM at $1M and above
+function formatCostBig(n) {
+  if (Math.abs(n) >= 1000000) return `$${(n / 1000000).toFixed(2)}M`;
+  return `$${(n / 1000).toFixed(0)}K`;
+}
 
 const STYLES_CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap');
-
   * { box-sizing: border-box; margin: 0; padding: 0; }
-
-  body {
-    background: #0c0e0f;
-    color: #e8e4dc;
-    font-family: 'DM Sans', sans-serif;
-    min-height: 100vh;
-  }
-
-  .app {
-    max-width: 880px;
-    margin: 0 auto;
-    padding: 48px 32px 80px;
-    text-align: left;
-  }
-
-  .header { margin-bottom: 56px; text-align: left; }
-
-  .logo {
+  body { background: #0c0e0f; color: #e8e4dc; font-family: 'DM Sans', sans-serif; min-height: 100vh; }
+  .app { max-width: 880px; margin: 0 auto; padding: 48px 32px 80px; text-align: left; }
+  .header { margin-bottom: 36px; text-align: left; }
+  .logo { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 13px; letter-spacing: 0.18em; text-transform: uppercase; color: #c8b97a; margin-bottom: 32px; display: flex; align-items: center; gap: 10px; }
+  .logo::before { content: ''; display: inline-block; width: 6px; height: 6px; background: #c8b97a; border-radius: 50%; }
+  .headline { font-family: 'Syne', sans-serif; font-weight: 800; font-size: clamp(32px, 5vw, 52px); line-height: 1.05; color: #f0ece2; margin-bottom: 16px; letter-spacing: -0.02em; }
+  .subhead { font-size: 16px; color: #8a8478; font-weight: 300; line-height: 1.6; max-width: 520px; }
+  .speed-claim {
+    margin-top: 22px;
+    margin-bottom: 4px;
     font-family: 'Syne', sans-serif;
-    font-weight: 800;
-    font-size: 13px;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
+    font-size: 22px;
+    font-weight: 700;
     color: #c8b97a;
-    margin-bottom: 32px;
+    letter-spacing: -0.005em;
+    line-height: 1.2;
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
   }
-
-  .logo::before {
+  .speed-claim::before {
     content: '';
     display: inline-block;
-    width: 6px;
-    height: 6px;
+    width: 8px;
+    height: 8px;
     background: #c8b97a;
     border-radius: 50%;
+    flex-shrink: 0;
   }
-
-  .headline {
-    font-family: 'Syne', sans-serif;
-    font-weight: 800;
-    font-size: clamp(32px, 5vw, 52px);
-    line-height: 1.05;
-    color: #f0ece2;
-    margin-bottom: 16px;
-    letter-spacing: -0.02em;
-    text-align: left;
-  }
-
-  .subhead {
-    font-size: 16px;
-    color: #8a8478;
-    font-weight: 300;
-    line-height: 1.6;
-    max-width: 520px;
-    text-align: left;
-  }
-
-  .trust-block {
-    background: #0c0e0f;
-    border: 1px solid #1e2022;
-    border-left: 2px solid #c8b97a;
-    border-radius: 2px;
-    padding: 28px 32px;
-    margin-bottom: 32px;
-    animation: fadeUp 0.5s ease 0.15s both;
-  }
-
-  .trust-line {
-    font-family: 'DM Mono', monospace;
-    font-size: 12px;
-    letter-spacing: 0.04em;
-    color: #c8b97a;
-    line-height: 1.6;
-    margin-bottom: 18px;
-  }
-
-  .trust-divider {
-    height: 1px;
-    background: #1e2022;
-    margin-bottom: 18px;
-  }
-
-  .trust-positioning {
-    display: grid;
-    gap: 14px;
-  }
-
-  .trust-row {
-    display: grid;
-    grid-template-columns: 110px 1fr;
-    gap: 20px;
-    align-items: baseline;
-  }
-
-  .trust-label {
-    font-family: 'Syne', sans-serif;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: #6a6760;
-    line-height: 1.4;
-  }
-
-  .trust-text {
-    font-size: 13px;
-    color: #c0bbb0;
-    line-height: 1.65;
-  }
-
   @media (max-width: 720px) {
-    .trust-block {
-      padding: 22px 20px;
-    }
-    .trust-row {
-      grid-template-columns: 1fr;
-      gap: 4px;
-    }
-    .trust-label {
-      font-size: 9px;
-    }
+    .speed-claim { font-size: 19px; gap: 10px; margin-top: 18px; }
+    .speed-claim::before { width: 7px; height: 7px; }
   }
 
-  .form-section {
-    background: #141618;
-    border: 1px solid #252820;
-    border-radius: 2px;
-    padding: 40px;
-    margin-bottom: 40px;
+  .trust-block { background: #0c0e0f; border: 1px solid #1e2022; border-left: 2px solid #c8b97a; border-radius: 2px; padding: 18px 24px; margin-bottom: 32px; animation: fadeUp 0.5s ease 0.15s both; }
+  .trust-line { font-family: 'DM Mono', monospace; font-size: 12px; letter-spacing: 0.04em; color: #c8b97a; line-height: 1.6; }
+  .trust-expand-btn { margin-top: 10px; padding: 4px 0; background: transparent; border: none; color: #6a6760; font-family: 'Syne', sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; cursor: pointer; transition: color 0.15s; display: inline-flex; align-items: center; gap: 6px; }
+  .trust-expand-btn:hover { color: #c8b97a; }
+  .trust-detail { overflow: hidden; max-height: 0; opacity: 0; transition: max-height 0.4s ease, opacity 0.3s ease, margin-top 0.3s ease; margin-top: 0; }
+  .trust-detail.expanded { max-height: 600px; opacity: 1; margin-top: 14px; }
+  .trust-divider { height: 1px; background: #1e2022; margin-bottom: 18px; }
+  .trust-positioning { display: grid; gap: 14px; }
+  .trust-row { display: grid; grid-template-columns: 110px 1fr; gap: 20px; align-items: baseline; }
+  .trust-label { font-family: 'Syne', sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: #6a6760; line-height: 1.4; }
+  .trust-text { font-size: 13px; color: #c0bbb0; line-height: 1.65; }
+  @media (max-width: 720px) {
+    .trust-block { padding: 16px 18px; }
+    .trust-row { grid-template-columns: 1fr; gap: 4px; }
+    .trust-label { font-size: 9px; }
+    .trust-detail.expanded { max-height: 800px; }
   }
 
-  .form-section h2 {
-    font-family: 'Syne', sans-serif;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: #c8b97a;
-    margin-bottom: 32px;
-  }
+  .form-section { background: #141618; border: 1px solid #252820; border-radius: 2px; padding: 40px; margin-bottom: 40px; }
+  .form-section h2 { font-family: 'Syne', sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; color: #c8b97a; margin-bottom: 32px; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  .form-field { display: flex; flex-direction: column; gap: 10px; }
+  .form-field.full { grid-column: 1 / -1; }
+  .form-field label { font-size: 11px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; color: #6a6760; }
+  .form-field input[type="number"], .form-field select { background: #0c0e0f; border: 1px solid #252820; border-radius: 2px; padding: 12px 16px; color: #e8e4dc; font-family: 'DM Mono', monospace; font-size: 15px; outline: none; transition: border-color 0.2s; width: 100%; -webkit-appearance: none; -moz-appearance: none; appearance: none; }
+  .form-field select { cursor: pointer; background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%23c8b97a' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5l5 5 5-5'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 16px center; background-size: 12px 8px; padding-right: 40px; }
+  .form-field input:focus, .form-field select:focus { border-color: #c8b97a; }
+  .form-field input::placeholder { color: #e8e4dc; font-family: 'DM Mono', monospace; font-size: 15px; letter-spacing: 0; font-style: italic; opacity: 1; }
 
-  .form-grid {
+  /* === Headcount + SF toggle side-by-side row === */
+  .hc-toggle-row { padding: 0; }
+  .hc-toggle-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 28px;
+    gap: 16px;
+    align-items: end;
+  }
+  .hc-field { display: flex; flex-direction: column; gap: 10px; }
+  .hc-field label { font-size: 11px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; color: #6a6760; }
+  .hc-field input { background: #0c0e0f; border: 1px solid #252820; border-radius: 2px; padding: 12px 16px; color: #e8e4dc; font-family: 'DM Mono', monospace; font-size: 15px; outline: none; transition: border-color 0.2s; width: 100%; -webkit-appearance: none; -moz-appearance: none; appearance: none; }
+  .hc-field input:focus { border-color: #c8b97a; }
+  .hc-field input::placeholder { color: #e8e4dc; font-family: 'DM Mono', monospace; font-size: 15px; letter-spacing: 0; font-style: italic; opacity: 1; }
+  .sf-toggle-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .sf-toggle-label { font-size: 11px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; color: transparent; user-select: none; }
+  .sf-toggle-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+  @media (max-width: 640px) {
+    .hc-toggle-grid { grid-template-columns: 1fr; gap: 14px; }
+    .sf-toggle-label { display: none; }
   }
 
-  .form-field {
+  /* === SF expand toggle — hides optional SF input until clicked === */
+  .sf-toggle-wrap { padding: 0; }
+  .sf-toggle {
     display: flex;
-    flex-direction: column;
-    gap: 10px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    background: transparent;
+    border: 1px dashed #2e3128;
+    border-radius: 2px;
+    padding: 11px 14px;
+    color: #8a8478;
+    font-family: 'DM Mono', monospace;
+    font-size: 13px;
+    font-style: italic;
+    letter-spacing: 0;
+    text-transform: none;
+    cursor: pointer;
+    transition: border-color 0.2s, color 0.2s;
+    text-align: left;
   }
-
-  .form-field.full { grid-column: 1 / -1; }
-
-  .form-field label {
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
+  .sf-toggle:hover { border-color: #c8b97a; color: #c0bbb0; }
+  .sf-toggle-tag {
+    font-family: 'Syne', sans-serif;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
     color: #6a6760;
+    background: #1a1c1e;
+    padding: 3px 8px;
+    border-radius: 2px;
+    border: 1px solid #2e3128;
+    flex-shrink: 0;
+    font-style: normal;
   }
-
-  .form-field input[type="number"],
-  .form-field select {
+  .sf-expand {
+    overflow: hidden;
+    max-height: 0;
+    opacity: 0;
+    transition: max-height 0.3s ease, opacity 0.25s ease, margin-top 0.25s ease;
+    margin-top: 0;
+  }
+  .sf-expand.open {
+    max-height: 80px;
+    opacity: 1;
+    margin-top: 10px;
+  }
+  .sf-expand-input {
     background: #0c0e0f;
     border: 1px solid #252820;
     border-radius: 2px;
@@ -343,750 +397,174 @@ const STYLES_CSS = `
     -moz-appearance: none;
     appearance: none;
   }
+  .sf-expand-input:focus { border-color: #c8b97a; }
+  .sf-expand-input::placeholder { color: #6a6760; font-style: italic; }
 
-  .form-field select {
-    cursor: pointer;
-    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%23c8b97a' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5l5 5 5-5'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 16px center;
-    background-size: 12px 8px;
-    padding-right: 40px;
-  }
-
-  .form-field input:focus,
-  .form-field select:focus { border-color: #c8b97a; }
-
-  .form-field input::placeholder {
-    color: #e8e4dc;
-    font-family: 'DM Mono', monospace;
-    font-size: 15px;
-    letter-spacing: 0;
-    font-style: italic;
-    opacity: 1;
-  }
-
-  .form-field input::-webkit-input-placeholder {
-    color: #e8e4dc;
-  }
-
-  .form-field input::-moz-placeholder {
-    color: #e8e4dc;
-    opacity: 1;
-  }
-
-  .btn-group {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .btn-toggle {
-    padding: 10px 20px;
-    border: 1px solid #252820;
-    border-radius: 2px;
-    background: transparent;
-    color: #8a8478;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.15s;
-    letter-spacing: 0.02em;
-  }
-
+  .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn-toggle { padding: 10px 20px; border: 1px solid #252820; border-radius: 2px; background: transparent; color: #8a8478; font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s; letter-spacing: 0.02em; }
   .btn-toggle:hover { border-color: #444; color: #e8e4dc; }
-  .btn-toggle.active {
-    background: #c8b97a;
-    border-color: #c8b97a;
-    color: #0c0e0f;
-    font-weight: 600;
-  }
+  .btn-toggle.active { background: #c8b97a; border-color: #c8b97a; color: #0c0e0f; font-weight: 600; }
 
-  .field-hint {
-    margin-top: 10px;
-    font-size: 12px;
-    color: #6a6760;
-    line-height: 1.55;
-    max-height: 0;
-    overflow: hidden;
-    opacity: 0;
-    transition: max-height 0.25s ease, opacity 0.2s ease;
-    border-left: 2px solid #2a2c28;
-    padding-left: 10px;
-  }
+  .lab-toggle-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .lab-usf-input { background: #0c0e0f !important; border: 1px solid #252820 !important; border-radius: 2px !important; padding: 10px 14px !important; color: #e8e4dc !important; font-family: 'DM Mono', monospace !important; font-size: 14px !important; outline: none !important; transition: border-color 0.2s !important; flex: 1; min-width: 140px; max-width: 200px; }
+  .lab-usf-input:focus { border-color: #c8b97a !important; }
 
-  .field-hint.visible {
-    max-height: 80px;
-    opacity: 1;
-  }
+  .field-hint { margin-top: 10px; font-size: 12px; color: #6a6760; line-height: 1.55; max-height: 0; overflow: hidden; opacity: 0; transition: max-height 0.25s ease, opacity 0.2s ease; border-left: 2px solid #2a2c28; padding-left: 10px; }
+  .field-hint.visible { max-height: 80px; opacity: 1; }
 
-  .slider-row {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-  }
+  .slider-row { display: flex; align-items: center; gap: 16px; }
+  .slider-row input[type="range"] { flex: 1; -webkit-appearance: none; height: 2px; background: #252820; outline: none; cursor: pointer; }
+  .slider-row input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; background: #c8b97a; border-radius: 50%; cursor: pointer; }
+  .slider-val { font-family: 'DM Mono', monospace; font-size: 18px; font-weight: 500; color: #c8b97a; min-width: 24px; text-align: center; }
 
-  .slider-row input[type="range"] {
-    flex: 1;
-    -webkit-appearance: none;
-    height: 2px;
-    background: #252820;
-    outline: none;
-    cursor: pointer;
-  }
-
-  .slider-row input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 16px;
-    height: 16px;
-    background: #c8b97a;
-    border-radius: 50%;
-    cursor: pointer;
-  }
-
-  .slider-val {
-    font-family: 'DM Mono', monospace;
-    font-size: 18px;
-    font-weight: 500;
-    color: #c8b97a;
-    min-width: 24px;
-    text-align: center;
-  }
-
-  .generate-btn {
-    margin-top: 32px;
-    width: 100%;
-    padding: 18px;
-    background: #c8b97a;
-    border: none;
-    border-radius: 2px;
-    font-family: 'Syne', sans-serif;
-    font-size: 14px;
-    font-weight: 700;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    color: #0c0e0f;
-    cursor: pointer;
-    transition: background 0.3s ease, opacity 0.2s;
-    min-height: 64px;
-  }
-
+  .generate-btn { margin-top: 32px; width: 100%; padding: 18px; background: #c8b97a; border: none; border-radius: 2px; font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; color: #0c0e0f; cursor: pointer; transition: background 0.3s ease, opacity 0.2s; min-height: 64px; }
   .generate-btn:hover { opacity: 0.9; }
   .generate-btn:disabled { cursor: not-allowed; background: #8a7d52; }
 
-  .loading-steps {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 3px;
-  }
-
-  .loading-step {
-    display: block;
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    opacity: 0;
-    transform: translateY(3px);
-    transition: opacity 0.4s ease, transform 0.4s ease;
-    text-transform: none;
-    font-weight: 400;
-    color: #1a160a55;
-    font-family: 'DM Sans', sans-serif;
-  }
-
-  .loading-step.active {
-    opacity: 1;
-    transform: translateY(0);
-    color: #1a160a;
-    font-weight: 700;
-    font-size: 13px;
-    letter-spacing: 0.06em;
-  }
-
-  .loading-step.done {
-    opacity: 0.3;
-    transform: translateY(0);
-  }
-
-  .loading-dots {
-    display: inline-flex;
-    gap: 3px;
-    margin-left: 6px;
-    vertical-align: middle;
-  }
-
-  .loading-dots span {
-    width: 4px;
-    height: 4px;
-    background: #1a160a;
-    border-radius: 50%;
-    display: inline-block;
-    animation: loadDot 1.2s ease-in-out infinite;
-  }
-
+  .loading-steps { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  .loading-step { display: block; font-size: 11px; letter-spacing: 0.08em; opacity: 0; transform: translateY(3px); transition: opacity 0.4s ease, transform 0.4s ease; text-transform: none; font-weight: 400; color: #1a160a55; font-family: 'DM Sans', sans-serif; }
+  .loading-step.active { opacity: 1; transform: translateY(0); color: #1a160a; font-weight: 700; font-size: 13px; letter-spacing: 0.06em; }
+  .loading-step.done { opacity: 0.3; transform: translateY(0); }
+  .loading-dots { display: inline-flex; gap: 3px; margin-left: 6px; vertical-align: middle; }
+  .loading-dots span { width: 4px; height: 4px; background: #1a160a; border-radius: 50%; display: inline-block; animation: loadDot 1.2s ease-in-out infinite; }
   .loading-dots span:nth-child(2) { animation-delay: 0.2s; }
   .loading-dots span:nth-child(3) { animation-delay: 0.4s; }
-
-  @keyframes loadDot {
-    0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
-    40% { opacity: 1; transform: scale(1.2); }
-  }
-
-  .action-block {
-    background: #0c0e0f;
-    border: 1px solid #252820;
-    border-left: 3px solid #8bb87a;
-    border-radius: 2px;
-    padding: 24px 28px;
-    margin-bottom: 32px;
-    animation: fadeUp 0.5s ease 0.15s both;
-    text-align: left;
-  }
-
-  .action-label {
-    font-family: 'Syne', sans-serif;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: #8bb87a;
-    margin-bottom: 14px;
-    text-align: left;
-  }
-
-  .action-section {
-    margin-bottom: 16px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid #1e2022;
-    text-align: left;
-  }
-
-  .action-section-label {
-    font-family: 'Syne', sans-serif;
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: #4a4f48;
-    margin-bottom: 6px;
-    text-align: left;
-  }
-
-  .action-line {
-    font-size: 13px;
-    color: #c8c4bc;
-    line-height: 1.55;
-    padding-left: 16px;
-    position: relative;
-    margin-bottom: 4px;
-    text-align: left;
-  }
-
-  .action-line::before {
-    content: '→';
-    position: absolute;
-    left: 0;
-    color: #8bb87a;
-    font-size: 12px;
-    top: 1px;
-  }
-
-  .action-apply-btn {
-    padding: 10px 20px;
-    background: transparent;
-    border: 1px solid #8bb87a55;
-    border-radius: 2px;
-    color: #8bb87a;
-    font-family: 'Syne', sans-serif;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-
-  .action-apply-btn:hover {
-    background: #8bb87a22;
-    border-color: #8bb87a;
-  }
-
-  .scenario-reveal-btn {
-    width: 100%;
-    padding: 14px;
-    background: transparent;
-    border: 1px solid #252820;
-    border-radius: 2px;
-    color: #6a6760;
-    font-family: 'Syne', sans-serif;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-  }
-
-  .scenario-reveal-btn:hover {
-    border-color: #c8b97a;
-    color: #c8b97a;
-  }
-
-  .scenario-panel {
-    transition: max-height 0.5s ease, opacity 0.4s ease;
-    max-height: 0;
-    opacity: 0;
-    overflow: hidden;
-  }
-
-  .scenario-panel.open {
-    max-height: 2000px;
-    opacity: 1;
-    overflow: visible;
-  }
+  @keyframes loadDot { 0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); } 40% { opacity: 1; transform: scale(1.2); } }
 
   .output-section { animation: fadeUp 0.4s ease; }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
 
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(16px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
+  /* === v1.1 Comparison Block — primary answer === */
+  .comparison-block { background: #141618; border: 1px solid #252820; border-left: 3px solid #c8b97a; border-radius: 2px; padding: 32px 36px; margin-bottom: 24px; animation: fadeUp 0.5s ease both; }
+  .comparison-block.audit-oversized { border-left-color: #c8876a; }
+  .comparison-block.audit-undersized { border-left-color: #7a9cb8; }
+  .comparison-label { font-family: 'Syne', sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: #c8b97a; margin-bottom: 6px; }
+  .comparison-block.audit-oversized .comparison-label { color: #c8876a; }
+  .comparison-block.audit-undersized .comparison-label { color: #7a9cb8; }
+  .comparison-sublabel { font-size: 11px; color: #6a6760; letter-spacing: 0.04em; margin-bottom: 24px; font-style: italic; }
+  .comparison-headline { font-family: 'Syne', sans-serif; font-size: clamp(18px, 2.6vw, 22px); font-weight: 700; color: #f0ece2; line-height: 1.3; margin-bottom: 24px; letter-spacing: -0.01em; }
+  .comparison-headline-savings { font-family: 'Syne', sans-serif; font-size: clamp(15px, 2.1vw, 18px); font-weight: 700; color: #c8b97a; line-height: 1.3; margin-top: -16px; margin-bottom: 24px; letter-spacing: -0.005em; }
+  .comparison-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-bottom: 20px; }
 
-  .recommendation-card {
-    background: #141618;
-    border: 1px solid #c8b97a33;
-    border-left: 3px solid #c8b97a;
-    border-radius: 2px;
-    padding: 36px 44px 32px;
-    margin-bottom: 48px;
-    text-align: left;
-  }
-
-  .rec-card-anim {
-    animation: fadeUp 0.5s ease both;
-  }
-
-  .metrics-anim {
-    animation: fadeUp 0.5s ease 0.25s both;
-  }
-
-  .rec-label {
-    font-family: 'Syne', sans-serif;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.22em;
-    text-transform: uppercase;
-    color: #c8b97a;
-    margin-bottom: 4px;
-    text-align: left;
-  }
-
-  .rec-sublabel {
-    font-size: 11px;
-    color: #444;
-    letter-spacing: 0.04em;
-    margin-bottom: 20px;
-    font-style: italic;
-    text-align: left;
-  }
-
-  .rec-impact {
-    font-family: 'DM Mono', monospace;
-    font-size: 22px;
-    color: #c8b97a;
-    font-weight: 500;
-    padding: 16px 20px;
-    background: #c8b97a0f;
-    border-left: 2px solid #c8b97a;
-    border-radius: 2px;
-    letter-spacing: 0.01em;
-    line-height: 1.35;
-    margin-bottom: 0;
-    text-align: left;
-  }
-
-  .rec-divider {
-    height: 1px;
-    background: linear-gradient(to right, #c8b97a33, transparent);
-    margin: 20px 0;
-  }
-
-  .rec-headline {
-    font-family: 'Syne', sans-serif;
-    font-size: clamp(18px, 2.8vw, 24px);
-    font-weight: 700;
-    color: #f0ece2;
-    line-height: 1.25;
-    margin-bottom: 20px;
-    letter-spacing: -0.01em;
-    text-align: left;
-  }
-
-  .rec-bullets {
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 9px;
-    padding-top: 4px;
-    border-top: 1px solid #1e2022;
-  }
-
-  .rec-bullets li {
-    font-size: 13px;
-    color: #8a8478;
-    line-height: 1.55;
-    padding-left: 20px;
-    position: relative;
-    padding-top: 4px;
-    text-align: left;
-  }
-
-  .rec-bullets li::before {
-    content: '→';
-    position: absolute;
-    left: 0;
-    color: #c8b97a;
-    font-size: 12px;
-    top: 4px;
-  }
-
-  .metrics-row {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 16px;
-    margin-bottom: 32px;
-  }
-
-  .metric-card {
-    background: #141618;
-    border: 1px solid #252820;
-    border-radius: 2px;
-    padding: 20px 22px;
-    text-align: left;
-  }
-
-  .metric-label {
-    font-size: 10px;
-    font-weight: 500;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: #6a6760;
-    margin-bottom: 8px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .tooltip-wrap {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-  }
-
-  .tooltip-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    border: 1px solid #4a4f48;
-    color: #8a8478;
-    font-size: 9px;
-    font-weight: 600;
-    cursor: help;
-    transition: border-color 0.15s, color 0.15s;
-    letter-spacing: 0;
-    text-transform: none;
-    font-family: 'DM Sans', sans-serif;
-    line-height: 1;
-    padding-bottom: 1px;
-  }
-
-  .tooltip-icon:hover,
-  .tooltip-icon:focus {
-    border-color: #c8b97a;
-    color: #c8b97a;
-    outline: none;
-  }
-
-  .tooltip-content {
-    position: absolute;
-    bottom: calc(100% + 10px);
-    left: 50%;
-    transform: translateX(-50%);
-    background: #1a1c1e;
-    border: 1px solid #2e3128;
-    border-radius: 3px;
-    padding: 12px 14px;
-    width: 280px;
-    color: #c0bbb0;
-    font-size: 11px;
-    font-weight: 400;
-    letter-spacing: 0;
-    text-transform: none;
-    line-height: 1.55;
-    font-family: 'DM Sans', sans-serif;
-    opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
-    transition: opacity 0.15s, visibility 0.15s;
-    z-index: 100;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
-  }
-
-  .tooltip-content::after {
-    content: "";
-    position: absolute;
-    top: 100%;
-    left: 50%;
-    transform: translateX(-50%);
-    border: 5px solid transparent;
-    border-top-color: #2e3128;
-  }
-
-  .tooltip-wrap:hover .tooltip-content,
-  .tooltip-icon:focus + .tooltip-content {
-    opacity: 1;
-    visibility: visible;
-  }
-
+  .embedded-bar-wrap { margin-bottom: 22px; }
+  .embedded-bar-label { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #6a6760; margin-bottom: 8px; font-weight: 600; }
+  .embedded-bar-track { height: 24px; background: #0c0e0f; border-radius: 2px; display: flex; overflow: hidden; margin-bottom: 10px; }
+  .embedded-bar-segment { height: 100%; transition: width 0.5s ease, opacity 0.2s; display: flex; align-items: center; justify-content: center; font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 500; white-space: nowrap; overflow: hidden; cursor: default; }
+  .embedded-bar-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: #8a8478; }
+  .embedded-legend-item { display: flex; align-items: center; gap: 5px; }
   @media (max-width: 720px) {
-    .tooltip-content {
-      width: 240px;
-      left: auto;
-      right: -8px;
-      transform: none;
-    }
-    .tooltip-content::after {
-      left: auto;
-      right: 12px;
-      transform: none;
-    }
+    .embedded-bar-track { height: 20px; }
+    .embedded-bar-legend { gap: 10px; font-size: 10px; }
   }
-
-  .metric-value {
-    font-family: 'DM Mono', monospace;
-    font-size: 24px;
-    font-weight: 500;
-    color: #f0ece2;
-    line-height: 1;
-  }
-
-  .metric-sub {
-    font-size: 11px;
-    color: #6a6760;
-    margin-top: 4px;
-  }
-
-  .scenario-section {
-    background: #141618;
-    border: 1px solid #252820;
-    border-radius: 2px;
-    padding: 28px 32px;
-    margin-bottom: 32px;
-  }
-
-  .scenario-section h3 {
-    font-family: 'Syne', sans-serif;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: #6a6760;
-    margin-bottom: 20px;
-  }
-
-  .scenario-row {
-    display: flex;
-    gap: 24px;
-    margin-bottom: 16px;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-
-  .scenario-label {
-    font-size: 12px;
-    color: #6a6760;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    min-width: 90px;
-  }
-
-  .scenario-compare {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    margin-top: 8px;
-  }
-
-  .scenario-col {
-    background: #0c0e0f;
-    border: 1px solid #252820;
-    border-radius: 2px;
-    padding: 16px 20px;
-  }
-
-  .scenario-col.active { border-color: #c8b97a44; }
-
-  .scenario-col-label {
-    font-size: 10px;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: #6a6760;
-    margin-bottom: 12px;
-  }
-
-  .scenario-col-label.active-label { color: #c8b97a; }
-
-  .scenario-stat {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    margin-bottom: 6px;
-  }
-
-  .scenario-stat-label { font-size: 12px; color: #6a6760; }
-  .scenario-stat-val {
-    font-family: 'DM Mono', monospace;
-    font-size: 14px;
-    color: #e8e4dc;
-  }
-
-  .bar-section {
-    background: #141618;
-    border: 1px solid #252820;
-    border-radius: 2px;
-    padding: 28px 32px;
-    margin-bottom: 32px;
-    overflow: visible;
+  .comparison-col { background: #0c0e0f; border: 1px solid #252820; border-radius: 2px; padding: 18px 20px; }
+  .comparison-col.recommended {
+    background: #16170d;
+    border-color: #c8b97a55;
+    border-top: 3px solid #c8b97a;
+    box-shadow: 0 0 0 1px #c8b97a22, 0 4px 16px rgba(200, 185, 122, 0.08);
+    transform: scale(1.02);
+    z-index: 1;
     position: relative;
   }
+  .comparison-col.delta-savings { border-color: #8bb87a44; border-top: 2px solid #8bb87a; }
+  .comparison-col.delta-cost { border-color: #c8876a44; border-top: 2px solid #c8876a; }
+  .comparison-col.delta-shortage { border-color: #7a9cb844; border-top: 2px solid #7a9cb8; }
+  .comparison-col-label { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #6a6760; margin-bottom: 10px; font-weight: 600; }
+  .comparison-col.recommended .comparison-col-label { color: #c8b97a; }
+  .comparison-col.delta-savings .comparison-col-label { color: #8bb87a; }
+  .comparison-col.delta-cost .comparison-col-label { color: #c8876a; }
+  .comparison-col.delta-shortage .comparison-col-label { color: #7a9cb8; }
+  .comparison-primary-stat { font-family: 'DM Mono', monospace; font-size: 24px; color: #f0ece2; line-height: 1; margin-bottom: 6px; font-weight: 500; }
+  .comparison-col.recommended .comparison-primary-stat { color: #c8b97a; font-size: 26px; }
+  .comparison-col.delta-savings .comparison-primary-stat { color: #8bb87a; }
+  .comparison-col.delta-cost .comparison-primary-stat { color: #c8876a; }
+  .comparison-col.delta-shortage .comparison-primary-stat { color: #7a9cb8; }
+  .comparison-secondary-stat { font-size: 13px; color: #a8a298; line-height: 1.5; margin-top: 2px; }
 
-  .bar-section h3 {
-    font-family: 'Syne', sans-serif;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: #6a6760;
-    margin-bottom: 24px;
+  .tactical-toggle { width: 100%; padding: 12px 16px; background: transparent; border: 1px solid #252820; border-radius: 2px; color: #8a8478; font-family: 'Syne', sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 8px; }
+  .tactical-toggle:hover { border-color: #c8b97a; color: #c8b97a; }
+  .expandable-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
+  .expandable-row .tactical-toggle { margin-top: 0; }
+  .tactical-panel { overflow: hidden; max-height: 0; opacity: 0; transition: max-height 0.4s ease, opacity 0.3s ease, margin-top 0.3s ease; margin-top: 0; }
+  .tactical-panel.open { max-height: 1200px; opacity: 1; margin-top: 16px; }
+  .tactical-line { font-size: 13px; color: #c8c4bc; line-height: 1.55; padding: 8px 0 8px 18px; position: relative; border-bottom: 1px solid #1e2022; }
+  .tactical-line:last-child { border-bottom: none; }
+  .tactical-line::before { content: '→'; position: absolute; left: 0; color: #8bb87a; font-size: 12px; top: 8px; }
+
+  /* === v1.1 Space Breakdown Table === */
+  .breakdown-table-wrap { padding: 4px 0; }
+  .breakdown-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .breakdown-table thead th { text-align: left; padding: 10px 12px; font-family: 'Syne', sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #6a6760; border-bottom: 1px solid #2a2c28; }
+  .breakdown-table thead th.num { text-align: right; }
+  .breakdown-table tbody td { padding: 12px; border-bottom: 1px solid #1e2022; vertical-align: top; color: #c8c4bc; }
+  .breakdown-table tbody td.num { text-align: right; font-family: 'DM Mono', monospace; color: #e8e4dc; white-space: nowrap; }
+  .breakdown-type { font-size: 13px; color: #e8e4dc; line-height: 1.4; }
+  .breakdown-note { font-size: 11px; color: #6a6760; margin-top: 3px; line-height: 1.4; font-style: italic; }
+  .breakdown-category td { padding: 14px 12px 8px !important; font-family: 'Syne', sans-serif; font-weight: 700; font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: #c8b97a !important; border-bottom: 1px solid #2a2c28 !important; }
+  .breakdown-category td.num { color: #c8b97a !important; font-family: 'DM Mono', monospace !important; font-size: 12px !important; letter-spacing: 0; text-transform: none; }
+  .breakdown-subtotal td { padding-top: 14px !important; border-top: 1px solid #2e3128 !important; border-bottom: 1px solid #1e2022 !important; font-size: 12px; font-weight: 600; color: #a8a298 !important; letter-spacing: 0.04em; }
+  .breakdown-subtotal td.num { color: #a8a298 !important; font-family: 'DM Mono', monospace; font-size: 13px; }
+  .breakdown-total td { padding-top: 14px !important; border-top: 2px solid #c8b97a !important; border-bottom: none !important; font-family: 'Syne', sans-serif; font-weight: 700; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: #c8b97a !important; }
+  .breakdown-total td.num { color: #c8b97a !important; font-family: 'DM Mono', monospace !important; font-size: 14px !important; letter-spacing: 0; text-transform: none; }
+  .breakdown-rsf td { padding: 12px !important; border-bottom: none !important; font-family: 'Syne', sans-serif; font-weight: 700; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: #8bb87a !important; }
+  .breakdown-rsf td.num { color: #8bb87a !important; font-family: 'DM Mono', monospace !important; font-size: 14px !important; letter-spacing: 0; text-transform: none; }
+  .breakdown-footnote { font-size: 11px; color: #6a6760; line-height: 1.55; padding: 14px 12px 4px; font-style: italic; }
+
+  /* === v1.1 AI Interpretation — single paragraph, demoted === */
+  .interpretation-block { background: #0c0e0f; border: 1px solid #1e2022; border-left: 2px solid #6a6760; border-radius: 2px; padding: 18px 22px; margin-bottom: 32px; animation: fadeUp 0.5s ease 0.15s both; }
+  .interpretation-label { font-family: 'Syne', sans-serif; font-size: 9px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; color: #6a6760; margin-bottom: 8px; }
+  .interpretation-text { font-size: 13px; color: #a8a298; line-height: 1.65; font-style: italic; }
+
+  /* === Metric reference strip (smaller, persistent) === */
+  .metrics-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 32px; }
+  .metric-card { background: #141618; border: 1px solid #252820; border-radius: 2px; padding: 14px 16px; }
+  .metric-label { font-size: 9px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #6a6760; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+
+  .tooltip-wrap { position: relative; display: inline-flex; align-items: center; }
+  .tooltip-icon { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; border-radius: 50%; border: 1px solid #4a4f48; color: #8a8478; font-size: 9px; font-weight: 600; cursor: help; transition: border-color 0.15s, color 0.15s; letter-spacing: 0; text-transform: none; font-family: 'DM Sans', sans-serif; line-height: 1; padding-bottom: 1px; }
+  .tooltip-icon:hover, .tooltip-icon:focus { border-color: #c8b97a; color: #c8b97a; outline: none; }
+  .tooltip-content { position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%); background: #1a1c1e; border: 1px solid #2e3128; border-radius: 3px; padding: 12px 14px; width: 280px; color: #c0bbb0; font-size: 11px; font-weight: 400; letter-spacing: 0; text-transform: none; line-height: 1.55; font-family: 'DM Sans', sans-serif; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 0.15s, visibility 0.15s; z-index: 100; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4); }
+  .tooltip-content::after { content: ""; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 5px solid transparent; border-top-color: #2e3128; }
+  .tooltip-wrap:hover .tooltip-content, .tooltip-icon:focus + .tooltip-content { opacity: 1; visibility: visible; }
+  @media (max-width: 720px) {
+    .tooltip-content { width: 240px; left: auto; right: -8px; transform: none; }
+    .tooltip-content::after { left: auto; right: 12px; transform: none; }
   }
 
-  .bar-track {
-    height: 36px;
-    background: #0c0e0f;
-    border-radius: 2px;
-    display: flex;
-    overflow: hidden;
-    margin-bottom: 12px;
-  }
+  .metric-value { font-family: 'DM Mono', monospace; font-size: 19px; font-weight: 500; color: #f0ece2; line-height: 1; }
+  .metric-sub { font-size: 10px; color: #6a6760; margin-top: 4px; }
 
-  .bar-segment {
-    height: 100%;
-    transition: width 0.5s ease, opacity 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: 'DM Mono', monospace;
-    font-size: 10px;
-    font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    cursor: pointer;
-  }
+  /* === Scenario Explorer — visible by default === */
+  .scenario-section { background: #141618; border: 1px solid #252820; border-radius: 2px; padding: 28px 32px; margin-bottom: 24px; }
+  .scenario-section h3 { font-family: 'Syne', sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; color: #c8b97a; margin-bottom: 6px; }
+  .scenario-section .scenario-helper { font-size: 11px; color: #6a6760; margin-bottom: 20px; font-style: italic; }
+  .scenario-row { display: flex; gap: 24px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
+  .scenario-label { font-size: 12px; color: #6a6760; letter-spacing: 0.08em; text-transform: uppercase; min-width: 90px; }
+  .scenario-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 8px; }
+  .scenario-col { background: #0c0e0f; border: 1px solid #252820; border-radius: 2px; padding: 16px 20px; }
+  .scenario-col.active { border-color: #c8b97a44; }
+  .scenario-col-label { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #6a6760; margin-bottom: 12px; }
+  .scenario-col-label.active-label { color: #c8b97a; }
+  .scenario-stat { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  .scenario-stat-label { font-size: 12px; color: #6a6760; }
+  .scenario-stat-val { font-family: 'DM Mono', monospace; font-size: 14px; color: #e8e4dc; }
 
-  .bar-segment.ai-flagged {
-    animation: aiFlagPulse 2s ease-in-out 3;
-  }
+  .bar-section { background: #141618; border: 1px solid #252820; border-radius: 2px; padding: 28px 32px; margin-bottom: 32px; overflow: visible; position: relative; }
+  .bar-section h3 { font-family: 'Syne', sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; color: #6a6760; margin-bottom: 24px; }
+  .bar-track { height: 36px; background: #0c0e0f; border-radius: 2px; display: flex; overflow: hidden; margin-bottom: 12px; }
+  .bar-segment { height: 100%; transition: width 0.5s ease, opacity 0.2s; display: flex; align-items: center; justify-content: center; font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 500; white-space: nowrap; overflow: hidden; cursor: pointer; }
+  .bar-legend { display: flex; gap: 20px; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #6a6760; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 1px; flex-shrink: 0; }
 
-  @keyframes aiFlagPulse {
-    0%, 100% { filter: brightness(1); }
-    50% { filter: brightness(1.25); }
-  }
-
-  .bar-legend {
-    display: flex;
-    gap: 20px;
-    flex-wrap: wrap;
-  }
-
-  .legend-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    color: #6a6760;
-  }
-
-  .legend-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 1px;
-    flex-shrink: 0;
-  }
-
-  .export-section {
-    background: #141618;
-    border: 1px solid #252820;
-    border-radius: 2px;
-    padding: 28px 32px;
-  }
-
-  .export-section h3 {
-    font-family: 'Syne', sans-serif;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: #6a6760;
-    margin-bottom: 20px;
-  }
-
-  .export-btn {
-    padding: 14px 28px;
-    background: transparent;
-    border: 1px solid #c8b97a;
-    border-radius: 2px;
-    color: #c8b97a;
-    font-family: 'Syne', sans-serif;
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-
-  .export-btn:hover {
-    background: #c8b97a;
-    color: #0c0e0f;
-  }
-
-  .summary-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-    margin-bottom: 24px;
-  }
-
-  .summary-line {
-    display: flex;
-    justify-content: space-between;
-    padding: 10px 0;
-    border-bottom: 1px solid #1e2022;
-    font-size: 13px;
-  }
-
+  .export-section { background: #141618; border: 1px solid #252820; border-radius: 2px; padding: 28px 32px; }
+  .export-section h3 { font-family: 'Syne', sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; color: #6a6760; margin-bottom: 20px; }
+  .export-btn { padding: 14px 28px; background: transparent; border: 1px solid #c8b97a; border-radius: 2px; color: #c8b97a; font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; cursor: pointer; transition: all 0.15s; }
+  .export-btn:hover { background: #c8b97a; color: #0c0e0f; }
+  .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+  .summary-line { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #1e2022; font-size: 13px; }
   .summary-line span:first-child { color: #6a6760; }
-  .summary-line span:last-child {
-    font-family: 'DM Mono', monospace;
-    color: #e8e4dc;
-  }
+  .summary-line span:last-child { font-family: 'DM Mono', monospace; color: #e8e4dc; }
 
   @media (max-width: 640px) {
     .form-grid { grid-template-columns: 1fr; }
@@ -1094,281 +572,72 @@ const STYLES_CSS = `
     .scenario-compare { grid-template-columns: 1fr; }
     .summary-grid { grid-template-columns: 1fr; }
     .form-section { padding: 24px; }
-    .recommendation-card { padding: 24px; }
+    .comparison-block { padding: 24px; }
+    .comparison-grid { grid-template-columns: 1fr; gap: 12px; }
+    .comparison-col.recommended { transform: none; }
+    .expandable-row { grid-template-columns: 1fr; gap: 8px; }
+    .breakdown-table { font-size: 12px; }
+    .breakdown-table tbody td { padding: 10px 8px; }
+    .breakdown-type { font-size: 12px; }
+    .breakdown-note { font-size: 10px; }
     .app { padding: 32px 20px 60px; }
   }
 `;
 
 const BAR_COLORS = ["#c8b97a", "#7a9cb8", "#8bb87a", "#b87a9c"];
 
-function computeRecommendedAction(inputs, output) {
-  if (!output) return null;
-
-  const currentStyle = inputs.workStyle;
-  const currentSF = output.totalSF;
-  const currentCost = getAnnualCost(currentSF, inputs.city);
-
-  let recStyle = currentStyle;
-  let recDensity = "Balanced";
-
-  if (currentStyle === "Assigned") {
-    recStyle = "Hybrid";
-    recDensity = "Balanced";
-  } else if (currentStyle === "Hybrid" || currentStyle === "Mixed") {
-    recDensity = "Aggressive";
-    recStyle = currentStyle;
-  } else {
-    recDensity = "Aggressive";
-  }
-
-  const recProg = computeProgram({ ...inputs, workStyle: recStyle }, recStyle, recDensity);
-  const recSF = recProg.totalSF;
-  const recCost = getAnnualCost(recSF, inputs.city);
-  const sfDelta = currentSF - recSF;
-  const costDelta = currentCost - recCost;
-
-  if (sfDelta <= 0) return null;
-
-  return { recStyle, recDensity, sfDelta, costDelta };
-}
-
 function HintButtonGroup({ options, value, hints, onChange }) {
   const [hovered, setHovered] = useState(null);
   const activeHint = hovered ? hints[hovered] : (value ? hints[value] : null);
   const showHint = !!(hovered || value);
-
   return (
     <div>
       <div className="btn-group">
         {options.map(o => (
-          <button
-            key={o}
-            className={`btn-toggle ${value === o ? "active" : ""}`}
+          <button key={o} className={`btn-toggle ${value === o ? "active" : ""}`}
             onClick={() => onChange(o)}
             onMouseEnter={() => setHovered(o)}
-            onMouseLeave={() => setHovered(null)}
-          >{o}</button>
+            onMouseLeave={() => setHovered(null)}>{o}</button>
         ))}
       </div>
-      <div className={`field-hint ${showHint ? "visible" : ""}`}>
-        {activeHint}
-      </div>
+      <div className={`field-hint ${showHint ? "visible" : ""}`}>{activeHint}</div>
     </div>
   );
 }
 
-const BAR_BENCHMARKS = {
-  "Desk Area":      { range: "55–65%", low: 55, high: 65, note: "Higher ratios typical for assigned seating; hybrid orgs trend lower" },
-  "Meeting Rooms":  { range: "15–20%", low: 15, high: 20, note: "Heavy meeting cultures can reach 25%; light teams often under 12%" },
-  "Collaboration":  { range: "10–15%", low: 10, high: 15, note: "Modern workplaces trending up — reflects activity-based design" },
-  "Support":        { range: "8–12%",  low: 8,  high: 12, note: "Includes phone rooms, storage, wellness, and circulation" }
-};
-
-function getBenchmarkSignal(label, pct) {
-  const b = BAR_BENCHMARKS[label];
-  if (!b) return null;
-  if (pct < b.low)  return { text: "↓ Below typical range", color: "#7a9cb8" };
-  if (pct > b.high) return { text: "⚠ Above typical range", color: "#c8876a" };
-  return { text: "✓ Within benchmark", color: "#8bb87a" };
-}
-
-const AI_MICRO_INSIGHTS = {
-  "Desk Area":     "Your work style and attendance pattern suggest this allocation may warrant review — hybrid orgs commonly run leaner.",
-  "Meeting Rooms": "Meeting room demand is highly pattern-dependent. Your stated preference is factored into this allocation.",
-  "Collaboration": "Activity-based work models typically increase this. Consider whether your culture supports unassigned collaboration space.",
-  "Support":       "Often underestimated in planning. Includes phone rooms, wellness, and circulation which directly impact employee experience."
-};
-
-const AI_SEGMENT_KEYWORDS = {
-  "Desk Area":     ["desk", "seating", "assigned", "workstation", "headcount"],
-  "Meeting Rooms": ["meeting", "conference", "room", "huddle"],
-  "Collaboration": ["collab", "lounge", "open space", "activity"],
-  "Support":       ["support", "storage", "phone room", "wellness"]
-};
-
-function getAIHighlightedSegments(aiRec) {
-  if (!aiRec) return new Set();
-  const text = `${aiRec.headline} ${aiRec.impact || ""} ${(aiRec.bullets || []).join(" ")}`.toLowerCase();
-  const highlighted = new Set();
-  Object.entries(AI_SEGMENT_KEYWORDS).forEach(([label, keywords]) => {
-    if (keywords.some(k => text.includes(k))) highlighted.add(label);
-  });
-  return highlighted;
-}
-
-function SpaceBar({ program, aiRec }) {
+function SpaceBar({ program }) {
   const [hovered, setHovered] = useState(null);
-  const [expanded, setExpanded] = useState(null);
-  const total = program.totalSF;
-  const aiHighlighted = getAIHighlightedSegments(aiRec);
-
-  const segments = [
-    {
-      label: "Desk Area",
-      sf: program.deskSF,
-      color: BAR_COLORS[0],
-      detail: [
-        { label: "Desk Count", value: formatNum(program.deskCount) + " desks" },
-        { label: "SF per Desk", value: formatNum(Math.round(program.deskSF / program.deskCount)) + " SF" },
-        { label: "Total Desk SF", value: formatSF(program.deskSF) },
-      ]
-    },
-    {
-      label: "Meeting Rooms",
-      sf: program.meetingSF,
-      color: BAR_COLORS[1],
-      detail: [
-        { label: "Small (1–4 ppl)", value: `${program.smallRooms} rooms · ${formatSF(program.smallRooms * 120)}` },
-        { label: "Medium (5–8 ppl)", value: `${program.medRooms} rooms · ${formatSF(program.medRooms * 250)}` },
-        { label: "Large (9+ ppl)", value: `${program.largeRooms} rooms · ${formatSF(program.largeRooms * 450)}` },
-      ]
-    },
-    {
-      label: "Collaboration",
-      sf: program.collabSF,
-      color: BAR_COLORS[2],
-      detail: [
-        { label: "Allocation", value: "15% of desk area" },
-        { label: "Total SF", value: formatSF(program.collabSF) },
-        { label: "Includes", value: "Lounges, huddle areas, open collab" },
-      ]
-    },
-    {
-      label: "Support",
-      sf: program.supportSF,
-      color: BAR_COLORS[3],
-      detail: [
-        { label: "Allocation", value: "10% of desk area" },
-        { label: "Total SF", value: formatSF(program.supportSF) },
-        { label: "Includes", value: "Phone rooms, storage, wellness, circulation" },
-      ]
-    }
+  const total = program.totalUSF;
+  const baseSegments = [
+    { label: "A&R Seats", sf: program.deskSF, color: BAR_COLORS[0] },
+    { label: "Conf / Collab", sf: program.confCollabSF, color: BAR_COLORS[1] },
+    { label: "Service Spaces", sf: program.serviceSF, color: BAR_COLORS[2] }
   ];
+  const segments = program.labSF > 0
+    ? [...baseSegments, { label: "Lab", sf: program.labSF, color: BAR_COLORS[3] }, { label: "Circulation + Walls", sf: program.circulationSF + program.wallThicknessSF, color: "#5a5a52" }]
+    : [...baseSegments, { label: "Circulation + Walls", sf: program.circulationSF + program.wallThicknessSF, color: "#5a5a52" }];
 
   return (
     <div className="bar-section">
-      <h3>Space Allocation <span style={{ fontFamily: "'DM Sans', sans-serif", fontWeight: 300, letterSpacing: 0, textTransform: "none", fontSize: 10, color: "#444", marginLeft: 8 }}>hover to benchmark · click to expand</span></h3>
-
-      {aiHighlighted.size > 0 && (
-        <div style={{ fontSize: 11, color: "#c8b97a88", marginBottom: 12, fontStyle: "italic", letterSpacing: "0.04em" }}>
-          ↑ AI recommendation references {[...aiHighlighted].join(" and ")} — segments highlighted below
-        </div>
-      )}
-
-      <div className="bar-track" style={{ cursor: "pointer" }}>
+      <h3>Space Allocation (USF)</h3>
+      <div className="bar-track">
         {segments.map((seg, i) => {
           const pct = ((seg.sf / total) * 100).toFixed(1);
           const isHovered = hovered === i;
-          const isExpanded = expanded === i;
-          const isAIFlagged = aiHighlighted.has(seg.label);
           return (
-            <div key={i}
-              className={`bar-segment ${isAIFlagged ? "ai-flagged" : ""}`}
-              style={{
-                width: `${pct}%`,
-                background: seg.color,
-                color: "#0c0e0f",
-                opacity: hovered !== null && !isHovered ? 0.55 : 1,
-                outline: isExpanded ? "2px solid #f0ece2" : isAIFlagged ? `2px solid ${seg.color}` : "none",
-                outlineOffset: isAIFlagged ? "2px" : "-2px",
-                transition: "opacity 0.2s, outline 0.15s",
-              }}
-              onMouseEnter={() => setHovered(i)}
-              onMouseLeave={() => setHovered(null)}
-              onClick={() => setExpanded(expanded === i ? null : i)}
-            >
+            <div key={i} className="bar-segment"
+              style={{ width: `${pct}%`, background: seg.color, color: "#0c0e0f", opacity: hovered !== null && !isHovered ? 0.55 : 1 }}
+              onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)}>
               {pct > 8 ? `${pct}%` : ""}
             </div>
           );
         })}
       </div>
-
-      {hovered !== null && (() => {
-        const seg = segments[hovered];
-        const pct = parseFloat(((seg.sf / total) * 100).toFixed(1));
-        const signal = getBenchmarkSignal(seg.label, pct);
-        return (
-          <div style={{
-            background: "#1e2122",
-            border: `1px solid ${seg.color}44`,
-            borderLeft: `3px solid ${seg.color}`,
-            borderRadius: 2,
-            padding: "12px 16px",
-            marginBottom: 16,
-            animation: "fadeUp 0.15s ease"
-          }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-              <span style={{ fontFamily: "'Syne', sans-serif", fontSize: 12, fontWeight: 700, color: "#e8e4dc", letterSpacing: "0.08em" }}>
-                {seg.label}
-              </span>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                {signal && (
-                  <span style={{ fontSize: 11, fontWeight: 600, color: signal.color, letterSpacing: "0.04em" }}>
-                    {signal.text}
-                  </span>
-                )}
-                <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 13, color: seg.color }}>
-                  {pct}% · {formatSF(seg.sf)}
-                </span>
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 20 }}>
-              <div>
-                <div style={{ fontSize: 10, color: "#6a6760", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 2 }}>Industry Benchmark</div>
-                <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 13, color: "#e8e4dc" }}>{BAR_BENCHMARKS[seg.label].range}</div>
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 10, color: "#6a6760", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 2 }}>Context</div>
-                <div style={{ fontSize: 12, color: "#8a8478", lineHeight: 1.5 }}>{BAR_BENCHMARKS[seg.label].note}</div>
-              </div>
-            </div>
-            <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #1e2022", fontSize: 10, color: "#444", fontStyle: "italic", lineHeight: 1.5 }}>
-              Benchmarks reflect general US corporate office norms (post-2020). Actual ranges vary by industry, market, and lease terms.
-            </div>
-            {aiHighlighted.has(seg.label) && aiRec && (
-              <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #2a2c28", display: "flex", alignItems: "flex-start", gap: 8 }}>
-                <span style={{ fontSize: 10, color: "#c8b97a", letterSpacing: "0.1em", textTransform: "uppercase", flexShrink: 0, marginTop: 1 }}>AI</span>
-                <span style={{ fontSize: 12, color: "#c8b97a99", fontStyle: "italic", lineHeight: 1.5 }}>
-                  {AI_MICRO_INSIGHTS[seg.label] || "Referenced in your strategic recommendation above."}
-                </span>
-              </div>
-            )}
-          </div>
-        );
-      })()}
-
-      {expanded !== null && (
-        <div style={{
-          background: "#0c0e0f",
-          border: `1px solid ${segments[expanded].color}33`,
-          borderTop: `2px solid ${segments[expanded].color}`,
-          borderRadius: 2,
-          padding: "16px 20px",
-          marginBottom: 16,
-          animation: "fadeUp 0.2s ease"
-        }}>
-          <div style={{ fontSize: 11, fontFamily: "'Syne', sans-serif", fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase", color: segments[expanded].color, marginBottom: 12 }}>
-            {segments[expanded].label} — Breakdown
-          </div>
-          {segments[expanded].detail.map((d, i) => (
-            <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: i < segments[expanded].detail.length - 1 ? "1px solid #1e2022" : "none" }}>
-              <span style={{ fontSize: 12, color: "#6a6760" }}>{d.label}</span>
-              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 12, color: "#e8e4dc" }}>{d.value}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
       <div className="bar-legend">
         {segments.map((seg, i) => (
-          <div key={i} className="legend-item"
-            style={{ cursor: "pointer", opacity: expanded === i ? 1 : 0.8 }}
-            onClick={() => setExpanded(expanded === i ? null : i)}>
+          <div key={i} className="legend-item">
             <div className="legend-dot" style={{ background: seg.color }} />
             {seg.label}: {formatSF(seg.sf)}
-            {aiHighlighted.has(seg.label) && (
-              <span style={{ marginLeft: 4, fontSize: 9, color: "#c8b97a", letterSpacing: "0.08em" }}>AI</span>
-            )}
           </div>
         ))}
       </div>
@@ -1376,24 +645,65 @@ function SpaceBar({ program, aiRec }) {
   );
 }
 
-function ScenarioPanel({ inputs, activeStyle, activeDensity, onStyleChange, onDensityChange }) {
-  const base = computeProgram(inputs, inputs.workStyle, "Balanced");
+// === v1.1 Embedded Space Bar — compact version for inside the comparison block ===
+function EmbeddedSpaceBar({ program }) {
+  const [hovered, setHovered] = useState(null);
+  const total = program.totalUSF;
+  const baseSegments = [
+    { label: "A&R Seats", sf: program.deskSF, color: BAR_COLORS[0] },
+    { label: "Conf / Collab", sf: program.confCollabSF, color: BAR_COLORS[1] },
+    { label: "Service Spaces", sf: program.serviceSF, color: BAR_COLORS[2] }
+  ];
+  const segments = program.labSF > 0
+    ? [...baseSegments, { label: "Lab", sf: program.labSF, color: BAR_COLORS[3] }, { label: "Circulation + Walls", sf: program.circulationSF + program.wallThicknessSF, color: "#5a5a52" }]
+    : [...baseSegments, { label: "Circulation + Walls", sf: program.circulationSF + program.wallThicknessSF, color: "#5a5a52" }];
+
+  return (
+    <div className="embedded-bar-wrap">
+      <div className="embedded-bar-label">Recommended program composition (USF)</div>
+      <div className="embedded-bar-track">
+        {segments.map((seg, i) => {
+          const pct = ((seg.sf / total) * 100).toFixed(1);
+          const isHovered = hovered === i;
+          return (
+            <div key={i} className="embedded-bar-segment"
+              style={{ width: `${pct}%`, background: seg.color, color: "#0c0e0f", opacity: hovered !== null && !isHovered ? 0.55 : 1 }}
+              onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)}
+              title={`${seg.label}: ${formatSF(seg.sf)} (${pct}%)`}>
+              {pct > 10 ? `${pct}%` : ""}
+            </div>
+          );
+        })}
+      </div>
+      <div className="embedded-bar-legend">
+        {segments.map((seg, i) => (
+          <div key={i} className="embedded-legend-item">
+            <div className="legend-dot" style={{ background: seg.color }} />
+            {seg.label}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ScenarioPanel({ inputs, activeStyle, activeDensity, onStyleChange, onDensityChange, recommendedStyle, recommendedDensity }) {
+  const recommended = computeProgram({ ...inputs, workStyle: recommendedStyle }, recommendedStyle, recommendedDensity);
   const scenario = computeProgram(inputs, activeStyle, activeDensity);
-  const city = inputs.city;
-  const baseCost = getAnnualCost(base.totalSF, city);
-  const scenarioCost = getAnnualCost(scenario.totalSF, city);
-  const diff = scenario.totalSF - base.totalSF;
-  const costDiff = scenarioCost - baseCost;
+  const recommendedCost = getAnnualCost(recommended.totalRSF, inputs.city);
+  const scenarioCost = getAnnualCost(scenario.totalRSF, inputs.city);
+  const diff = scenario.totalRSF - recommended.totalRSF;
+  const costDiff = scenarioCost - recommendedCost;
 
   return (
     <div className="scenario-section">
-      <h3>Scenario Explorer</h3>
+      <h3>Pressure-Test the Recommendation</h3>
+      <div className="scenario-helper">Adjust work style and density to compare against the recommended scenario. The recommendation is pre-loaded.</div>
       <div className="scenario-row">
         <span className="scenario-label">Work Style</span>
         <div className="btn-group">
           {WORK_STYLES.map(s => (
-            <button key={s} className={`btn-toggle ${activeStyle === s ? "active" : ""}`}
-              onClick={() => onStyleChange(s)}>{s}</button>
+            <button key={s} className={`btn-toggle ${activeStyle === s ? "active" : ""}`} onClick={() => onStyleChange(s)}>{s}</button>
           ))}
         </div>
       </div>
@@ -1401,25 +711,26 @@ function ScenarioPanel({ inputs, activeStyle, activeDensity, onStyleChange, onDe
         <span className="scenario-label">Density</span>
         <div className="btn-group">
           {DENSITIES.map(d => (
-            <button key={d} className={`btn-toggle ${activeDensity === d ? "active" : ""}`}
-              onClick={() => onDensityChange(d)}>{d}</button>
+            <button key={d} className={`btn-toggle ${activeDensity === d ? "active" : ""}`} onClick={() => onDensityChange(d)}>{d}</button>
           ))}
         </div>
       </div>
       <div className="scenario-compare" style={{ marginTop: 24 }}>
         <div className="scenario-col">
-          <div className="scenario-col-label">Baseline ({inputs.workStyle} / Balanced)</div>
-          <div className="scenario-stat"><span className="scenario-stat-label">Total SF</span><span className="scenario-stat-val">{formatSF(base.totalSF)}</span></div>
-          <div className="scenario-stat"><span className="scenario-stat-label">Desks</span><span className="scenario-stat-val">{formatNum(base.deskCount)}</span></div>
-          <div className="scenario-stat"><span className="scenario-stat-label">Annual Cost</span><span className="scenario-stat-val">{formatCost(baseCost)}</span></div>
+          <div className="scenario-col-label">Recommended ({recommendedStyle} / {recommendedDensity})</div>
+          <div className="scenario-stat"><span className="scenario-stat-label">Total RSF</span><span className="scenario-stat-val">{formatSF(recommended.totalRSF)}</span></div>
+          <div className="scenario-stat"><span className="scenario-stat-label">Total USF</span><span className="scenario-stat-val">{formatSF(recommended.totalUSF)}</span></div>
+          <div className="scenario-stat"><span className="scenario-stat-label">Desks</span><span className="scenario-stat-val">{formatNum(recommended.deskCount)}</span></div>
+          <div className="scenario-stat"><span className="scenario-stat-label">Annual Rent</span><span className="scenario-stat-val">{formatCostBig(recommendedCost)}</span></div>
         </div>
         <div className="scenario-col active">
-          <div className="scenario-col-label active-label">{activeStyle} / {activeDensity}</div>
-          <div className="scenario-stat"><span className="scenario-stat-label">Total SF</span><span className="scenario-stat-val">{formatSF(scenario.totalSF)}</span></div>
+          <div className="scenario-col-label active-label">Your Scenario ({activeStyle} / {activeDensity})</div>
+          <div className="scenario-stat"><span className="scenario-stat-label">Total RSF</span><span className="scenario-stat-val">{formatSF(scenario.totalRSF)}</span></div>
+          <div className="scenario-stat"><span className="scenario-stat-label">Total USF</span><span className="scenario-stat-val">{formatSF(scenario.totalUSF)}</span></div>
           <div className="scenario-stat"><span className="scenario-stat-label">Desks</span><span className="scenario-stat-val">{formatNum(scenario.deskCount)}</span></div>
-          <div className="scenario-stat"><span className="scenario-stat-label">Annual Cost</span>
+          <div className="scenario-stat"><span className="scenario-stat-label">Annual Rent</span>
             <span className="scenario-stat-val" style={{ color: costDiff < 0 ? "#8bb87a" : costDiff > 0 ? "#b87a7a" : "#e8e4dc" }}>
-              {costDiff !== 0 ? `${costDiff < 0 ? "-" : "+"}${formatCost(Math.abs(costDiff))}` : formatCost(scenarioCost)}
+              {costDiff !== 0 ? `${costDiff < 0 ? "-" : "+"}${formatCostBig(Math.abs(costDiff))}` : formatCostBig(scenarioCost)}
             </span>
           </div>
         </div>
@@ -1427,7 +738,7 @@ function ScenarioPanel({ inputs, activeStyle, activeDensity, onStyleChange, onDe
       {diff !== 0 && (
         <div style={{ marginTop: 16, padding: "12px 16px", background: diff < 0 ? "#8bb87a11" : "#b87a7a11", borderRadius: 2, border: `1px solid ${diff < 0 ? "#8bb87a33" : "#b87a7a33"}` }}>
           <span style={{ fontSize: 13, color: diff < 0 ? "#8bb87a" : "#c8876a" }}>
-            {diff < 0 ? `↓ Reduces space by ${formatSF(Math.abs(diff))} — saves ${formatCost(Math.abs(costDiff))}/yr` : `↑ Increases space by ${formatSF(diff)} — adds ${formatCost(Math.abs(costDiff))}/yr`}
+            {diff < 0 ? `↓ ${formatSF(Math.abs(diff))} less RSF than recommended — saves ${formatCostBig(Math.abs(costDiff))}/yr` : `↑ ${formatSF(diff)} more RSF than recommended — adds ${formatCostBig(Math.abs(costDiff))}/yr`}
           </span>
         </div>
       )}
@@ -1435,66 +746,480 @@ function ScenarioPanel({ inputs, activeStyle, activeDensity, onStyleChange, onDe
   );
 }
 
+function getRecommendedScenario(inputs) {
+  const currentStyle = inputs.workStyle;
+  if (currentStyle === "Assigned") return { style: "Hybrid", density: "Balanced" };
+  if (currentStyle === "Hybrid" || currentStyle === "Mixed") return { style: currentStyle, density: "Aggressive" };
+  return { style: "Hoteling", density: "Aggressive" };
+}
+
+function computeTacticalChanges(baselineProg, recommendedProg, baselineStyle, recommendedStyle) {
+  const changes = [];
+  const deskDelta = baselineProg.deskCount - recommendedProg.deskCount;
+  const roomDelta = baselineProg.meetingRooms - recommendedProg.meetingRooms;
+  const largeRoomDelta = baselineProg.largeRooms - recommendedProg.largeRooms;
+  const baselineSFPerDesk = Math.round(baselineProg.deskSF / baselineProg.deskCount);
+  const recSFPerDesk = Math.round(recommendedProg.deskSF / recommendedProg.deskCount);
+
+  if (recommendedStyle !== baselineStyle) {
+    changes.push(`Shift work style from ${baselineStyle} to ${recommendedStyle}`);
+  }
+  if (deskDelta > 0) {
+    changes.push(`Reduce desks from ${baselineProg.deskCount} to ${recommendedProg.deskCount} (${deskDelta} fewer)`);
+  } else if (deskDelta < 0) {
+    changes.push(`Increase desks from ${baselineProg.deskCount} to ${recommendedProg.deskCount} (${Math.abs(deskDelta)} more)`);
+  }
+  if (baselineSFPerDesk !== recSFPerDesk) {
+    changes.push(`Target ${recSFPerDesk} SF per desk (currently ${baselineSFPerDesk} SF)`);
+  }
+  if (roomDelta > 0) {
+    changes.push(`Reduce meeting rooms from ${baselineProg.meetingRooms} to ${recommendedProg.meetingRooms} (${roomDelta} fewer)`);
+  }
+  if (largeRoomDelta > 0) {
+    changes.push(`Convert ${largeRoomDelta} large conference room${largeRoomDelta > 1 ? "s" : ""} to smaller huddle spaces — large rooms above 8 seats are chronically underused`);
+  }
+  if (changes.length === 0) {
+    changes.push("Current programming is well-aligned to the recommended scenario — no major structural changes needed");
+  }
+  return changes;
+}
+
+// === v1.1 Space Breakdown Table — defends the SF number ===
+function SpaceBreakdownTable({ program, workStyle }) {
+  const sfPerDesk = program.sfPerDesk;
+  const subtotalProgram = program.programSubtotalSF;
+  const totalUSF = program.totalUSF;
+  const totalRSF = program.totalRSF;
+  const pctOfUSF = (sf) => `${Math.round((sf / totalUSF) * 100)}%`;
+
+  // Build rows organized by category, with category subtotals
+  const arSeats = [
+    {
+      type: "Workstations / Desks",
+      count: program.deskCount,
+      sfEach: sfPerDesk,
+      totalSF: program.deskSF,
+      note: `${sfPerDesk} SF/desk · ${workStyle.toLowerCase()} program standard`
+    }
+  ];
+
+  const confCollab = [
+    program.smallRooms > 0 && {
+      type: "Small meeting rooms",
+      count: program.smallRooms,
+      sfEach: 168,
+      totalSF: program.smallRooms * 168,
+      note: "4-6 person huddles"
+    },
+    program.medRooms > 0 && {
+      type: "Medium meeting rooms",
+      count: program.medRooms,
+      sfEach: 280,
+      totalSF: program.medRooms * 280,
+      note: "8-10 person team rooms"
+    },
+    program.largeRooms > 0 && {
+      type: "Large meeting rooms",
+      count: program.largeRooms,
+      sfEach: 420,
+      totalSF: program.largeRooms * 420,
+      note: "12-16 person conference rooms"
+    },
+    program.phoneBooths > 0 && {
+      type: "Phone booths",
+      count: program.phoneBooths,
+      sfEach: 20,
+      totalSF: program.phoneBoothSF,
+      note: "1-person privacy booths · ~1 per 40 HC"
+    },
+    program.collabSeatingAreas > 0 && {
+      type: "Collab seating",
+      count: program.collabSeatingAreas,
+      sfEach: 200,
+      totalSF: program.collabSeatingSF,
+      note: "Open lounge / breakout zones"
+    }
+  ].filter(Boolean);
+
+  const service = [
+    program.restroomSF > 0 && {
+      type: "Restrooms",
+      count: null, sfEach: null,
+      totalSF: program.restroomSF,
+      note: "Code-required, scales with HC"
+    },
+    program.mechElecSF > 0 && {
+      type: "Mechanical / Electrical",
+      count: null, sfEach: null,
+      totalSF: program.mechElecSF,
+      note: "Building systems rooms"
+    },
+    program.copyPrintSF > 0 && {
+      type: "Copy / Print",
+      count: null, sfEach: null,
+      totalSF: program.copyPrintSF,
+      note: "Centralized print + supplies"
+    },
+    program.breakDiningSF > 0 && {
+      type: "Break / Dining",
+      count: null, sfEach: null,
+      totalSF: program.breakDiningSF,
+      note: "Pantry, café, eating area"
+    },
+    program.wellnessMothersSF > 0 && {
+      type: "Wellness / Mother's room",
+      count: null, sfEach: null,
+      totalSF: program.wellnessMothersSF,
+      note: "Code-required at 50+ HC"
+    },
+    program.itClosetsSF > 0 && {
+      type: "IT / IDF / MDF closets",
+      count: null, sfEach: null,
+      totalSF: program.itClosetsSF,
+      note: "Telecom + network infrastructure"
+    },
+    program.storageSF > 0 && {
+      type: "Storage",
+      count: null, sfEach: null,
+      totalSF: program.storageSF,
+      note: "General-use storage"
+    }
+  ].filter(Boolean);
+
+  const lab = program.labSF > 0 ? [{
+    type: "Lab",
+    count: null, sfEach: null,
+    totalSF: program.labSF,
+    note: "User-provided lab USF"
+  }] : [];
+
+  const renderRow = (r, i) => (
+    <tr key={i}>
+      <td>
+        <div className="breakdown-type">{r.type}</div>
+        <div className="breakdown-note">{r.note}</div>
+      </td>
+      <td className="num">{r.count !== null ? formatNum(r.count) : "—"}</td>
+      <td className="num">{r.sfEach !== null ? formatNum(r.sfEach) : "—"}</td>
+      <td className="num">{formatNum(r.totalSF)}</td>
+      <td className="num">{pctOfUSF(r.totalSF)}</td>
+    </tr>
+  );
+
+  const renderCategoryHeader = (label, subtotal) => (
+    <tr className="breakdown-category">
+      <td colSpan={3}>{label}</td>
+      <td className="num">{formatNum(subtotal)}</td>
+      <td className="num">{pctOfUSF(subtotal)}</td>
+    </tr>
+  );
+
+  const arSeatsSubtotal = program.deskSF;
+  const confCollabSubtotal = program.confCollabSF;
+  const serviceSubtotal = program.serviceSF;
+
+  return (
+    <div className="breakdown-table-wrap">
+      <table className="breakdown-table">
+        <thead>
+          <tr>
+            <th>Space Type</th>
+            <th className="num">Count</th>
+            <th className="num">SF Each</th>
+            <th className="num">USF</th>
+            <th className="num">% of USF</th>
+          </tr>
+        </thead>
+        <tbody>
+          {renderCategoryHeader("Assigned & Reservable Seats", arSeatsSubtotal)}
+          {arSeats.map(renderRow)}
+
+          {renderCategoryHeader("Conference / Vendor / Collab", confCollabSubtotal)}
+          {confCollab.map((r, i) => renderRow(r, `cc-${i}`))}
+
+          {renderCategoryHeader("Service Spaces", serviceSubtotal)}
+          {service.map((r, i) => renderRow(r, `sv-${i}`))}
+
+          {lab.length > 0 && renderCategoryHeader("Lab", program.labSF)}
+          {lab.map((r, i) => renderRow(r, `lab-${i}`))}
+
+          <tr className="breakdown-subtotal">
+            <td colSpan={3}>Programmed Space Subtotal</td>
+            <td className="num">{formatNum(subtotalProgram)}</td>
+            <td className="num">{pctOfUSF(subtotalProgram)}</td>
+          </tr>
+          <tr>
+            <td>
+              <div className="breakdown-type">+ Circulation (33%)</div>
+              <div className="breakdown-note">Corridors, aisles, exit pathways — applied to subtotal</div>
+            </td>
+            <td className="num">—</td>
+            <td className="num">—</td>
+            <td className="num">{formatNum(program.circulationSF)}</td>
+            <td className="num">{pctOfUSF(program.circulationSF)}</td>
+          </tr>
+          <tr>
+            <td>
+              <div className="breakdown-type">+ Wall Thickness (3%)</div>
+              <div className="breakdown-note">Interior partitions and structural walls</div>
+            </td>
+            <td className="num">—</td>
+            <td className="num">—</td>
+            <td className="num">{formatNum(program.wallThicknessSF)}</td>
+            <td className="num">{pctOfUSF(program.wallThicknessSF)}</td>
+          </tr>
+          <tr className="breakdown-total">
+            <td colSpan={3}>Total Usable SF (USF)</td>
+            <td className="num">{formatNum(totalUSF)}</td>
+            <td className="num">100%</td>
+          </tr>
+          <tr className="breakdown-rsf">
+            <td colSpan={3}>Total Rentable SF (RSF) · {Math.round((program.lossFactor - 1) * 100)}% loss factor</td>
+            <td className="num">{formatNum(totalRSF)}</td>
+            <td className="num">—</td>
+          </tr>
+        </tbody>
+      </table>
+      <div className="breakdown-footnote">
+        Calibrated against JLL and CBRE 2025 occupancy planning benchmarks (132-165 USF/HC for hybrid programs) plus Fortune 500 corporate real estate program data. USF (Usable Square Feet) is what employees occupy. RSF (Rentable Square Feet) is what leases are quoted in — it adds the building's loss factor (your share of common areas like lobbies, elevator banks, and shared corridors). Loss factor varies by market: ~25% in Tier 1 gateway cities (NYC, SF, Boston, DC), ~20% in major coastal/tech markets, ~15% in standard secondary markets, ~10-12% in suburban/efficient buildings. Confirm the actual U:R ratio for your specific building with your broker.
+      </div>
+    </div>
+  );
+}
+
+// === v1.1 Comparison Block ===
+function ComparisonBlock({ inputs, recommendedScenario, tacticalOpen, setTacticalOpen, breakdownOpen, setBreakdownOpen, capacityEstimates }) {
+  const hasHC = inputs.headcount && inputs.headcount > 0;
+  const hasSF = inputs.currentSF && inputs.currentSF > 0;
+  const recommendedProg = computeProgram({ ...inputs, workStyle: recommendedScenario.style }, recommendedScenario.style, recommendedScenario.density);
+  const recommendedCost = getAnnualCost(recommendedProg.totalRSF, inputs.city);
+  const recRSFPerPerson = inputs.headcount ? Math.round(recommendedProg.totalRSF / inputs.headcount) : null;
+
+  // Mode 1: HC + SF — Right-Sizing Audit
+  if (hasHC && hasSF) {
+    // currentSF treated as RSF (what user leases)
+    const rsfDelta = inputs.currentSF - recommendedProg.totalRSF;
+    const sfPct = Math.round((rsfDelta / inputs.currentSF) * 100);
+    const costDelta = getAnnualCost(Math.abs(rsfDelta), inputs.city);
+    const isOversized = rsfDelta > 0;
+    const blockClass = isOversized ? "audit-oversized" : "audit-undersized";
+    const deltaColLabel = isOversized ? "Annual Savings" : "Capacity Shortage";
+    const deltaColClass = isOversized ? "delta-cost" : "delta-shortage";
+    const headlinePrimary = isOversized
+      ? `You're carrying ${sfPct}% more space than you need`
+      : `You're short ${Math.abs(sfPct)}% of the space you need`;
+    const headlineSecondary = isOversized
+      ? `${formatCostBig(recommendedCost)}/yr · ${formatCostBig(costDelta)}/yr leaner than current`
+      : `${formatCostBig(recommendedCost)}/yr · ${formatCostBig(costDelta)}/yr more than current`;
+    const baselineProg = computeProgram(inputs, inputs.workStyle, "Balanced");
+    const tacticalChanges = computeTacticalChanges(baselineProg, recommendedProg, inputs.workStyle, recommendedScenario.style);
+
+    return (
+      <div className={`comparison-block ${blockClass}`}>
+        <div className="comparison-label">Right-Sizing Audit</div>
+        <div className="comparison-sublabel">{inputs.city} · {inputs.headcount} people · {formatNum(inputs.currentSF)} RSF current · {inputs.workStyle}</div>
+        <div className="comparison-headline">{headlinePrimary}</div>
+        <div className="comparison-headline-savings">{headlineSecondary}</div>
+        <EmbeddedSpaceBar program={recommendedProg} />
+        <div className="comparison-grid">
+          <div className="comparison-col">
+            <div className="comparison-col-label">Your Current</div>
+            <div className="comparison-primary-stat">{formatNum(inputs.currentSF)} RSF</div>
+            <div className="comparison-secondary-stat">{Math.round(inputs.currentSF / inputs.headcount)} SF/person · {formatCostBig(getAnnualCost(inputs.currentSF, inputs.city))}/yr</div>
+          </div>
+          <div className="comparison-col recommended">
+            <div className="comparison-col-label">Recommended</div>
+            <div className="comparison-primary-stat">{formatNum(recommendedProg.totalRSF)} RSF</div>
+            <div className="comparison-secondary-stat">{formatNum(recommendedProg.totalUSF)} USF · {formatCostBig(recommendedCost)}/yr</div>
+          </div>
+          <div className={`comparison-col ${deltaColClass}`}>
+            <div className="comparison-col-label">{deltaColLabel}</div>
+            <div className="comparison-primary-stat">{isOversized ? "−" : "+"}{formatCostBig(costDelta)}/yr</div>
+            <div className="comparison-secondary-stat">${Math.round(costDelta / inputs.headcount).toLocaleString()}/person/yr · {isOversized ? "−" : "+"}{Math.abs(sfPct)}% {isOversized ? "oversized" : "undersized"}</div>
+          </div>
+        </div>
+        <div className="expandable-row">
+          <button className="tactical-toggle" onClick={() => setTacticalOpen(o => !o)}>
+            {tacticalOpen ? "▲ Hide what needs to change" : "▼ What needs to change"}
+          </button>
+          <button className="tactical-toggle" onClick={() => setBreakdownOpen(o => !o)}>
+            {breakdownOpen ? "▲ Hide the math" : "▼ See the math behind this"}
+          </button>
+        </div>
+        <div className={`tactical-panel ${tacticalOpen ? "open" : ""}`}>
+          {tacticalChanges.map((change, i) => (
+            <div key={i} className="tactical-line">{change}</div>
+          ))}
+        </div>
+        <div className={`tactical-panel ${breakdownOpen ? "open" : ""}`}>
+          <SpaceBreakdownTable program={recommendedProg} workStyle={recommendedScenario.style} />
+        </div>
+      </div>
+    );
+  }
+
+  // Mode 2: SF only — Capacity Evaluation
+  if (hasSF && !hasHC) {
+    const cap = capacityEstimates;
+    const annualCost = getAnnualCost(inputs.currentSF, inputs.city);
+    const capRange = `${cap.Assigned}–${cap.Hoteling}`;
+    const recProgForBar = computeProgram({ ...inputs, headcount: cap.Hybrid, workStyle: "Hybrid" }, "Hybrid", "Balanced");
+    const headlinePrimary = `${formatNum(inputs.currentSF)} RSF holds ${capRange} people`;
+    const headlineSecondary = `The operating model decides where you land`;
+
+    return (
+      <div className="comparison-block">
+        <div className="comparison-label">Capacity Evaluation</div>
+        <div className="comparison-sublabel">{inputs.city} · {formatNum(inputs.currentSF)} RSF · {formatCostBig(annualCost)}/yr at current rates</div>
+        <div className="comparison-headline">{headlinePrimary}</div>
+        <div className="comparison-headline-savings">{headlineSecondary}</div>
+        <EmbeddedSpaceBar program={recProgForBar} />
+        <div className="comparison-grid">
+          <div className="comparison-col">
+            <div className="comparison-col-label">Assigned</div>
+            <div className="comparison-primary-stat">~{cap.Assigned}</div>
+            <div className="comparison-secondary-stat">people · 1:1 desk ratio · traditional offices</div>
+          </div>
+          <div className="comparison-col recommended">
+            <div className="comparison-col-label">Hybrid (recommended)</div>
+            <div className="comparison-primary-stat">~{cap.Hybrid}</div>
+            <div className="comparison-secondary-stat">people · 3-day attendance · shared desks</div>
+          </div>
+          <div className="comparison-col">
+            <div className="comparison-col-label">Hoteling</div>
+            <div className="comparison-primary-stat">~{cap.Hoteling}</div>
+            <div className="comparison-secondary-stat">people · fully unassigned · max density</div>
+          </div>
+        </div>
+        <div style={{ marginTop: 12, fontSize: 11, color: "#4a4f48", fontStyle: "italic", lineHeight: 1.55 }}>
+          Estimates assume {inputs.meetingPref.toLowerCase()} meeting needs and treat your input as RSF (rentable). Actual capacity varies with attendance pattern, team composition, and U:R ratio of your specific building.
+        </div>
+      </div>
+    );
+  }
+
+  // Mode 3: HC only — Recommended Program vs traditional 1:1
+  const naiveProg = computeNaiveProgram(inputs);
+  const naiveCost = getAnnualCost(naiveProg.totalRSF, inputs.city);
+  const rsfSavings = naiveProg.totalRSF - recommendedProg.totalRSF;
+  const costSavings = naiveCost - recommendedCost;
+  const savingsPct = Math.round((rsfSavings / naiveProg.totalRSF) * 100);
+  const naiveRSFPerPerson = Math.round(naiveProg.totalRSF / inputs.headcount);
+  const headlinePrimary = `${inputs.headcount} people need ${formatNum(recommendedProg.totalRSF)} RSF`;
+  const headlineSecondary = rsfSavings > 0
+    ? `${formatCostBig(recommendedCost)}/yr · ${formatCostBig(costSavings)}/yr leaner than traditional 1:1 sizing`
+    : `${formatCostBig(recommendedCost)}/yr`;
+  const baselineProg = computeProgram(inputs, inputs.workStyle, "Balanced");
+  const tacticalChanges = computeTacticalChanges(baselineProg, recommendedProg, inputs.workStyle, recommendedScenario.style);
+
+  return (
+    <div className="comparison-block">
+      <div className="comparison-label">Recommended Program</div>
+      <div className="comparison-sublabel">{inputs.city} · {inputs.headcount} people · {inputs.workStyle}{inputs.workStyle !== "Assigned" && inputs.workStyle !== "Hoteling" ? ` · ${inputs.daysInOffice} days/week` : ""}{inputs.labUSF ? ` · ${formatNum(inputs.labUSF)} USF lab` : ""}</div>
+      <div className="comparison-headline">{headlinePrimary}</div>
+      {headlineSecondary && <div className="comparison-headline-savings">{headlineSecondary}</div>}
+      <EmbeddedSpaceBar program={recommendedProg} />
+      <div className="comparison-grid">
+        <div className="comparison-col">
+          <div className="comparison-col-label">Traditional 1:1 Sizing</div>
+          <div className="comparison-primary-stat">{formatNum(naiveProg.totalRSF)} RSF</div>
+          <div className="comparison-secondary-stat">{naiveRSFPerPerson} SF/person · {formatCostBig(naiveCost)}/yr</div>
+        </div>
+        <div className="comparison-col recommended">
+          <div className="comparison-col-label">Recommended</div>
+          <div className="comparison-primary-stat">{formatNum(recommendedProg.totalRSF)} RSF</div>
+          <div className="comparison-secondary-stat">{formatNum(recommendedProg.totalUSF)} USF · {formatCostBig(recommendedCost)}/yr</div>
+        </div>
+        <div className="comparison-col delta-savings">
+          <div className="comparison-col-label">Difference</div>
+          <div className="comparison-primary-stat">−{formatCostBig(costSavings)}/yr</div>
+          <div className="comparison-secondary-stat">${Math.round(costSavings / inputs.headcount).toLocaleString()}/person/yr · −{savingsPct}% leaner footprint</div>
+        </div>
+      </div>
+      <div className="expandable-row">
+        <button className="tactical-toggle" onClick={() => setTacticalOpen(o => !o)}>
+          {tacticalOpen ? "▲ Hide what needs to change" : "▼ What needs to change"}
+        </button>
+        <button className="tactical-toggle" onClick={() => setBreakdownOpen(o => !o)}>
+          {breakdownOpen ? "▲ Hide the math" : "▼ See the math behind this"}
+        </button>
+      </div>
+      <div className={`tactical-panel ${tacticalOpen ? "open" : ""}`}>
+        {tacticalChanges.map((change, i) => (
+          <div key={i} className="tactical-line">{change}</div>
+        ))}
+      </div>
+      <div className={`tactical-panel ${breakdownOpen ? "open" : ""}`}>
+        <SpaceBreakdownTable program={recommendedProg} workStyle={recommendedScenario.style} />
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [inputs, setInputs] = useState({
-    headcount: null,
-    workStyle: "Hybrid",
-    daysInOffice: 3,
-    meetingPref: "Moderate",
-    city: "San Diego",
-    mixedRatio: 50,
-    currentSF: null
+    headcount: null, workStyle: "Hybrid", daysInOffice: 3, meetingPref: "Moderate",
+    city: "San Diego", mixedRatio: 50, currentSF: null,
+    hasLab: false, labUSF: null
   });
-
   const [output, setOutput] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState(0);
-  const [aiRec, setAiRec] = useState(null);
+  const [aiInterpretation, setAiInterpretation] = useState(null);
   const [scenarioStyle, setScenarioStyle] = useState("Hybrid");
   const [scenarioDensity, setScenarioDensity] = useState("Balanced");
-  const [scenarioOpen, setScenarioOpen] = useState(false);
+  const [recommendedScenario, setRecommendedScenario] = useState({ style: "Hybrid", density: "Balanced" });
   const [capacityEstimates, setCapacityEstimates] = useState(null);
   const [effectiveHC, setEffectiveHC] = useState(null);
+  const [tacticalOpen, setTacticalOpen] = useState(false);
+  const [breakdownOpen, setBreakdownOpen] = useState(false);
+  const [trustExpanded, setTrustExpanded] = useState(false);
+  const [sfExpanded, setSfExpanded] = useState(false);
+  const [resolvedInputs, setResolvedInputs] = useState(null);
 
   const set = (k, v) => setInputs(p => ({ ...p, [k]: v }));
 
   const LOADING_STEPS = [
     "Analyzing occupancy patterns",
     "Modeling space requirements",
-    "Generating strategic recommendation"
+    "Generating market interpretation"
   ];
 
   const handleGenerate = async () => {
     setLoading(true);
     setLoadingStep(0);
-    setScenarioOpen(false);
     setOutput(null);
-    setAiRec(null);
+    setAiInterpretation(null);
+    setTacticalOpen(false);
+    setBreakdownOpen(false);
+    setResolvedInputs(null);
 
     setTimeout(() => setLoadingStep(1), 600);
     setTimeout(() => setLoadingStep(2), 1200);
-
     await new Promise(r => setTimeout(r, 1800));
 
-    // Determine effective inputs for downstream calculation.
-    // If user provided SF but not HC, estimate HC at their selected work style.
     let effectiveInputs = { ...inputs };
+    // Normalize lab USF — only include if hasLab is true
+    if (!effectiveInputs.hasLab) effectiveInputs.labUSF = 0;
     let capacities = null;
 
     if (!inputs.headcount && inputs.currentSF) {
-      // SF-only mode — compute capacity at all three primary work styles
-      capacities = computeCapacityFromSF(inputs.currentSF, inputs.meetingPref);
-      // Use the user's selected work style estimate as the canonical HC for downstream
+      capacities = computeCapacityFromSF(inputs.currentSF, inputs.meetingPref, inputs.city);
       const styleKey = inputs.workStyle === "Mixed" ? "Hybrid" : inputs.workStyle;
       effectiveInputs.headcount = capacities[styleKey] || capacities.Hybrid;
     }
 
     setCapacityEstimates(capacities);
     setEffectiveHC(effectiveInputs.headcount);
+    setResolvedInputs(effectiveInputs);
 
-    const prog = computeProgram(effectiveInputs, effectiveInputs.workStyle, "Balanced");
-    setScenarioStyle(effectiveInputs.workStyle);
-    setScenarioDensity("Balanced");
+    const recScenario = getRecommendedScenario(effectiveInputs);
+    setRecommendedScenario(recScenario);
+
+    const recProg = computeProgram({ ...effectiveInputs, workStyle: recScenario.style }, recScenario.style, recScenario.density);
+
+    setScenarioStyle(recScenario.style);
+    setScenarioDensity(recScenario.density);
 
     try {
       const response = await fetch("/api/claude", {
@@ -1504,175 +1229,57 @@ export default function App() {
           inputs: effectiveInputs,
           originalInputs: inputs,
           capacityEstimates: capacities,
+          recommendedScenario: recScenario,
           program: {
-            totalSF: prog.totalSF,
-            deskCount: prog.deskCount,
-            meetingRooms: prog.meetingRooms,
-            smallRooms: prog.smallRooms,
-            medRooms: prog.medRooms,
-            largeRooms: prog.largeRooms,
-            deskRatio: prog.deskRatio,
-            peakOccupancy: prog.peakOccupancy,
-            annualCost: getAnnualCost(prog.totalSF, inputs.city)
+            totalUSF: recProg.totalUSF,
+            totalRSF: recProg.totalRSF,
+            totalSF: recProg.totalUSF, // legacy alias for backward compat
+            deskCount: recProg.deskCount,
+            meetingRooms: recProg.meetingRooms,
+            smallRooms: recProg.smallRooms,
+            medRooms: recProg.medRooms,
+            largeRooms: recProg.largeRooms,
+            deskRatio: recProg.deskRatio,
+            peakOccupancy: recProg.peakOccupancy,
+            lossFactor: recProg.lossFactor,
+            annualCost: getAnnualCost(recProg.totalRSF, inputs.city)
           }
         })
       });
-
       if (!response.ok) throw new Error("API request failed");
-
       const data = await response.json();
-      setAiRec(data);
+      setAiInterpretation(data.interpretation || data.headline || null);
     } catch (e) {
-      // Fallback content — branches based on input combination
       const hasHC = inputs.headcount && inputs.headcount > 0;
       const hasSF = inputs.currentSF && inputs.currentSF > 0;
 
       if (hasHC && hasSF) {
-        // Right-sizing audit fallback (HC + SF)
-        const sfDelta = inputs.currentSF - prog.totalSF;
-        const sfPct = Math.round((sfDelta / inputs.currentSF) * 100);
-        const costDelta = getAnnualCost(Math.abs(sfDelta), inputs.city);
-        const direction = sfDelta > 0 ? "oversized" : "undersized";
-        const verb = sfDelta > 0 ? "avoidable" : "needed";
-
-        setAiRec({
-          headline: sfDelta > 0
-            ? `You're carrying ${Math.abs(sfPct)}% more space than ${inputs.headcount} ${inputs.workStyle.toLowerCase()} employees actually need — overpaying ~${formatCost(costDelta)}/yr for unused capacity.`
-            : `Your ${formatNum(inputs.currentSF)} SF footprint is undersized by ~${Math.abs(sfPct)}% for ${inputs.headcount} ${inputs.workStyle.toLowerCase()} employees — likely creating density and utilization stress.`,
-          impact: sfDelta > 0
-            ? `That ${formatCost(costDelta)}/yr is sitting in unused capacity. A 1:1 desk ratio is rarely justified at ${inputs.daysInOffice}-day attendance patterns.`
-            : `Aligned programming would require an additional ${formatSF(Math.abs(sfDelta))} — current footprint is creating ~${formatCost(costDelta)}/yr in operational drag from over-density.`,
-          bullets: [
-            `Your current ${formatNum(Math.round(inputs.currentSF / inputs.headcount))} SF/person ratio runs ${Math.round(inputs.currentSF / inputs.headcount) > Math.round(prog.totalSF / inputs.headcount) ? "above" : "below"} the ${formatNum(Math.round(prog.totalSF / inputs.headcount))} SF/person benchmark for ${inputs.workStyle.toLowerCase()} programs.`,
-            `Most companies at this attendance pattern overbuild large conference rooms by 2-3x — worth auditing your current room mix against actual booking data.`,
-            `At ${inputs.city} market rates, every 10% of footprint variance is approximately ${formatCost(getAnnualCost(inputs.currentSF * 0.1, inputs.city))} per year on the books.`
-          ]
-        });
+        const rsfPerPerson = Math.round(inputs.currentSF / inputs.headcount);
+        // JLL 2025 benchmark of 132-165 SF/HC refers to programmed/usable space.
+        // Once circulation (33%), walls (3%), and loss factor (12%) stack on top, real RSF runs ~50% higher.
+        // So the RSF benchmarks become roughly: Hybrid ~200, Assigned ~300, Hoteling ~160
+        const benchmark = inputs.workStyle === "Hybrid" ? 200 : inputs.workStyle === "Assigned" ? 300 : 160;
+        const direction = rsfPerPerson > benchmark + 20 ? "above" : rsfPerPerson < benchmark - 20 ? "below" : "near";
+        setAiInterpretation(
+          `At ${rsfPerPerson} RSF/person you sit ${direction} the typical ${benchmark} RSF/person range for ${inputs.workStyle.toLowerCase()} programs once circulation, walls, and the building's loss factor are accounted for (JLL 2025 benchmarks of 132-165 USF/HC for hybrid grossing up to ~200 RSF in real buildings). Most underwater audits trace back to conference room overbuilding, where 60%+ of actual meetings are 2-4 people while rooms above 8 seats sit chronically underused. ${inputs.city} sublease availability through ${COST_DATA_AS_OF} continues to favor tenants, sharpening the leverage on any right-sizing decision made now.`
+        );
       } else if (hasSF && !hasHC) {
-        // Capacity evaluation fallback (SF only)
-        const cap = capacities || computeCapacityFromSF(inputs.currentSF, inputs.meetingPref);
-        const range = `${cap.Assigned}–${cap.Hoteling}`;
-        const annualCost = getAnnualCost(inputs.currentSF, inputs.city);
-
-        setAiRec({
-          headline: `${formatNum(inputs.currentSF)} SF in ${inputs.city} can support roughly ${range} people depending on work style — annual occupancy cost ~${formatCost(annualCost)}.`,
-          impact: `At hybrid attendance, this space programs to approximately ${cap.Hybrid} people — a typical anchor for evaluating fit.`,
-          bullets: [
-            `Assigned seating model: ~${cap.Assigned} people. Best for assigned-desk cultures or firms with low remote adoption.`,
-            `Hybrid (3 days/week): ~${cap.Hybrid} people. The most common post-2020 model and a reasonable default benchmark.`,
-            `Hoteling / unassigned: ~${cap.Hoteling} people. Maximum density, requires operational maturity around desk booking and storage.`
-          ]
-        });
+        setAiInterpretation(
+          `Capacity ranges this wide aren't a calculation artifact — they reflect a real choice about operational maturity. Hoteling-grade density (per JLL 2025, 132 USF/HC programmed, ~160 RSF/HC after gross-up) requires booking systems, locker programs, and a culture that's already past the assigned-seat default; firms that skip those investments end up paying for the RSF without capturing the savings.`
+        );
       } else {
-        // Forward-looking planning fallback (HC only — original behavior)
-        setAiRec({
-          headline: `At ${inputs.headcount} people running ${inputs.daysInOffice}-day ${inputs.workStyle.toLowerCase()} attendance, a 1:1 desk ratio is likely overprogrammed — meaningful space and cost can be recovered without affecting employee experience.`,
-          impact: `Roughly ${formatCost(getAnnualCost(prog.totalSF * 0.1, inputs.city))}/yr in occupancy cost is typically recoverable through density-aligned programming alone.`,
-          bullets: [
-            `Your ${inputs.daysInOffice}-day attendance pattern means peak occupancy averages around ${prog.peakOccupancy} — programming for ${inputs.headcount} desks builds in ~${Math.round((1 - prog.peakOccupancy/inputs.headcount) * 100)}% capacity that's rarely used.`,
-            `Most companies overbuild large conference rooms by 2-3x — 60%+ of meetings are 2-4 people, and rooms above 8 seats are chronically underutilized.`,
-            `At ${inputs.city} market rates, every 10% of footprint reduction is approximately ${formatCost(getAnnualCost(prog.totalSF * 0.1, inputs.city))}/yr — material against a ${formatCost(getAnnualCost(prog.totalSF, inputs.city))}/yr cost line.`
-          ]
-        });
+        setAiInterpretation(
+          `Traditional 1:1 sizing assumes every employee occupies a desk simultaneously, but peak occupancy for ${inputs.daysInOffice}-day hybrid populations runs around ${Math.round((inputs.daysInOffice / 5) * 100)}% — a third of dedicated desks sit empty on any given day. JLL's 2025 benchmarks show hybrid programs targeting 132-165 USF/HC (programmed) or roughly 200 RSF/HC after circulation, walls, and the building's loss factor stack on top — down meaningfully from the pre-2020 assigned-seat standard of 225 USF/HC.`
+        );
       }
     }
 
-    setOutput(prog);
+    setOutput(recProg);
     setLoading(false);
     setLoadingStep(0);
   };
 
-  const handleExport = () => {
-    if (!output) return;
-    const prog = computeProgram(inputs, scenarioStyle, scenarioDensity);
-    const cost = getAnnualCost(prog.totalSF, inputs.city);
-    const baseProg = computeProgram(inputs, inputs.workStyle, "Balanced");
-    const baseCost = getAnnualCost(baseProg.totalSF, inputs.city);
-
-    const win = window.open("", "_blank");
-    win.document.write(`
-<!DOCTYPE html><html><head>
-<meta charset="utf-8">
-<title>OptiSpace Lite — Space Program Summary</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap');
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'DM Sans', sans-serif; background: #fff; color: #1a1a1a; padding: 60px; max-width: 860px; margin: 0 auto; }
-  .header { border-bottom: 2px solid #1a1a1a; padding-bottom: 24px; margin-bottom: 36px; }
-  .logo { font-family: 'Syne', sans-serif; font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: #888; margin-bottom: 12px; }
-  h1 { font-family: 'Syne', sans-serif; font-size: 28px; font-weight: 800; line-height: 1.1; }
-  .meta { font-size: 12px; color: #888; margin-top: 8px; }
-  .rec-box { background: #f8f5ed; border-left: 3px solid #c8b97a; padding: 20px 24px; margin-bottom: 32px; border-radius: 1px; }
-  .rec-label { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: #c8b97a; font-weight: 700; margin-bottom: 10px; }
-  .rec-headline { font-family: 'Syne', sans-serif; font-size: 18px; font-weight: 700; margin-bottom: 14px; }
-  .rec-bullets li { font-size: 13px; color: #444; margin-bottom: 6px; margin-left: 16px; line-height: 1.5; }
-  .section-label { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: #888; font-weight: 700; margin-bottom: 14px; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 32px; }
-  td { padding: 10px 0; border-bottom: 1px solid #eee; font-size: 13px; }
-  td:last-child { text-align: right; font-family: 'DM Mono', monospace; font-weight: 500; }
-  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 32px; }
-  .compare-col { border: 1px solid #eee; padding: 16px 20px; border-radius: 2px; }
-  .compare-col h4 { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #888; margin-bottom: 10px; }
-  .compare-col.active { border-color: #c8b97a; }
-  .compare-col.active h4 { color: #c8b97a; }
-  .compare-stat { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; }
-  .compare-stat span:last-child { font-family: 'DM Mono', monospace; }
-  .footer { border-top: 1px solid #eee; padding-top: 16px; font-size: 11px; color: #aaa; display: flex; justify-content: space-between; }
-</style>
-</head><body>
-<div class="header">
-  <div class="logo">OptiSpace Lite</div>
-  <h1>Space Program Summary</h1>
-  <div class="meta">${inputs.city} · ${inputs.headcount} people · ${inputs.workStyle} · Generated ${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}</div>
-</div>
-
-${aiRec ? `
-<div class="rec-box">
-  <div class="rec-label">Strategic Recommendation</div>
-  <div class="rec-headline">${aiRec.headline}</div>
-  <ul class="rec-bullets">${aiRec.bullets.map(b => `<li>${b}</li>`).join("")}</ul>
-</div>` : ""}
-
-<div class="section-label">Space Program</div>
-<table>
-  <tr><td>Total Headcount</td><td>${formatNum(inputs.headcount)}</td></tr>
-  <tr><td>Peak Daily Occupancy</td><td>${formatNum(output.peakOccupancy)}</td></tr>
-  <tr><td>Desk Count</td><td>${formatNum(output.deskCount)}</td></tr>
-  <tr><td>Meeting Rooms</td><td>${formatNum(output.meetingRooms)} (${output.smallRooms} small · ${output.medRooms} medium · ${output.largeRooms} large)</td></tr>
-  <tr><td>Desk Area</td><td>${formatSF(output.deskSF)}</td></tr>
-  <tr><td>Meeting Room Area</td><td>${formatSF(output.meetingSF)}</td></tr>
-  <tr><td>Collaboration</td><td>${formatSF(output.collabSF)}</td></tr>
-  <tr><td>Support Spaces</td><td>${formatSF(output.supportSF)}</td></tr>
-  <tr><td><strong>Total SF</strong></td><td><strong>${formatSF(output.totalSF)}</strong></td></tr>
-  <tr><td>Est. Annual Occupancy Cost (${inputs.city})</td><td>${formatCost(baseCost)}/yr</td></tr>
-</table>
-
-<div class="section-label">Scenario Comparison</div>
-<div class="compare">
-  <div class="compare-col">
-    <h4>Baseline · ${inputs.workStyle} / Balanced</h4>
-    <div class="compare-stat"><span>Total SF</span><span>${formatSF(baseProg.totalSF)}</span></div>
-    <div class="compare-stat"><span>Desks</span><span>${formatNum(baseProg.deskCount)}</span></div>
-    <div class="compare-stat"><span>Annual Cost</span><span>${formatCost(baseCost)}</span></div>
-  </div>
-  <div class="compare-col active">
-    <h4>Scenario · ${scenarioStyle} / ${scenarioDensity}</h4>
-    <div class="compare-stat"><span>Total SF</span><span>${formatSF(prog.totalSF)}</span></div>
-    <div class="compare-stat"><span>Desks</span><span>${formatNum(prog.deskCount)}</span></div>
-    <div class="compare-stat"><span>Annual Cost</span><span>${formatCost(cost)}</span></div>
-  </div>
-</div>
-
-<div class="footer">
-  <span>Prepared with OptiSpace Lite</span>
-  <span>Directional only — not a substitute for detailed programming</span>
-</div>
-</body></html>`);
-    win.document.close();
-    setTimeout(() => win.print(), 500);
-  };
-
-  const currentProg = output ? computeProgram(inputs, scenarioStyle, scenarioDensity) : null;
+  const currentProg = output && resolvedInputs ? computeProgram(resolvedInputs, scenarioStyle, scenarioDensity) : null;
 
   return (
     <>
@@ -1681,22 +1288,26 @@ ${aiRec ? `
         <div className="header">
           <div className="logo">OptiSpace Lite</div>
           <h1 className="headline">Stop guessing your<br />real estate needs.</h1>
-          <p className="subhead">Five inputs. A complete space program, scenario analysis, and strategic recommendation. Under 2 minutes.</p>
+          <p className="subhead">Headcount in. Defensible space program out — with cost, capacity, and the math behind it.</p>
+          <div className="speed-claim">Under 30 seconds.</div>
         </div>
 
         <div className="trust-block">
-          <div className="trust-line">
-            Built on 15 years of leading corporate real estate planning across Fortune 500 portfolios.
-          </div>
-          <div className="trust-divider" />
-          <div className="trust-positioning">
-            <div className="trust-row">
-              <div className="trust-label">What this is</div>
-              <div className="trust-text">A real estate and workplace strategy tool for companies before getting into the details — translating headcount, square footage, and work style into a directional starting point in under two minutes.</div>
-            </div>
-            <div className="trust-row">
-              <div className="trust-label">What it isn't</div>
-              <div className="trust-text">A substitute for broker engagement, lease economics, or the judgment of someone who actually knows your business.</div>
+          <div className="trust-line">Built on 15 years of corporate real estate planning across Fortune 500 portfolios.</div>
+          <button className="trust-expand-btn" onClick={() => setTrustExpanded(e => !e)}>
+            {trustExpanded ? "▲ Hide details" : "▼ How this tool works"}
+          </button>
+          <div className={`trust-detail ${trustExpanded ? "expanded" : ""}`}>
+            <div className="trust-divider" />
+            <div className="trust-positioning">
+              <div className="trust-row">
+                <div className="trust-label">What this is</div>
+                <div className="trust-text">A directional sizing tool — translating headcount, square footage, and work style into a defensible USF and RSF range with a programmed space breakdown, in under two minutes. Calibrated against JLL and CBRE 2025 occupancy planning benchmarks and structural patterns from Fortune 500 corporate real estate programs.</div>
+              </div>
+              <div className="trust-row">
+                <div className="trust-label">What it isn't</div>
+                <div className="trust-text">A substitute for detailed space programming, broker engagement, lease economics, or the judgment of a planner with knowledge of your business, building, and local code requirements.</div>
+              </div>
             </div>
           </div>
         </div>
@@ -1704,31 +1315,27 @@ ${aiRec ? `
         <div className="form-section">
           <h2>Your Workplace</h2>
           <div className="form-grid">
-            <div className="form-field">
-              <label>
-                Total Headcount
-                <span style={{ marginLeft: 8, color: "#4a4f48", fontWeight: 400, textTransform: "none", letterSpacing: 0, fontSize: 11, fontStyle: "italic" }}>
-                  optional if SF provided
-                </span>
-              </label>
-              <input type="number" value={inputs.headcount || ""} min={0} max={10000}
-                placeholder="e.g. 150"
-                onChange={e => set("headcount", e.target.value === "" ? null : parseInt(e.target.value) || 0)} />
-            </div>
-            <div className="form-field">
-              <label>
-                Current Square Footage
-                <span style={{ marginLeft: 8, color: "#4a4f48", fontWeight: 400, textTransform: "none", letterSpacing: 0, fontSize: 11, fontStyle: "italic" }}>
-                  optional
-                </span>
-              </label>
-              <input type="number" value={inputs.currentSF || ""} min={0} max={10000000}
-                placeholder="e.g. 22,000"
-                onChange={e => set("currentSF", e.target.value === "" ? null : parseInt(e.target.value) || 0)} />
-            </div>
-            <div className="form-field full" style={{ marginTop: -10, marginBottom: 4 }}>
-              <div style={{ fontSize: 11, color: "#6a6760", lineHeight: 1.55, fontStyle: "italic" }}>
-                Provide either, both, or one to audit your current footprint against the recommended program.
+            <div className="form-field full hc-toggle-row">
+              <div className="hc-toggle-grid">
+                <div className="hc-field">
+                  <label>Total Headcount</label>
+                  <input type="number" value={inputs.headcount || ""} min={0} max={10000} placeholder="e.g. 150"
+                    onChange={e => set("headcount", e.target.value === "" ? null : parseInt(e.target.value) || 0)} />
+                </div>
+                <div className="sf-toggle-col">
+                  <label className="sf-toggle-label">&nbsp;</label>
+                  <button
+                    type="button"
+                    className="sf-toggle"
+                    onClick={() => setSfExpanded(e => !e)}>
+                    <span className="sf-toggle-text">{sfExpanded ? "− Hide footprint" : "+ Compare footprint"}</span>
+                    <span className="sf-toggle-tag">OPTIONAL</span>
+                  </button>
+                </div>
+              </div>
+              <div className={`sf-expand ${sfExpanded ? "open" : ""}`}>
+                <input type="number" className="sf-expand-input" value={inputs.currentSF || ""} min={0} max={10000000} placeholder="Current RSF · e.g. 22,000"
+                  onChange={e => set("currentSF", e.target.value === "" ? null : parseInt(e.target.value) || 0)} />
               </div>
             </div>
             <div className="form-field full">
@@ -1739,12 +1346,7 @@ ${aiRec ? `
             </div>
             <div className="form-field full">
               <label>Work Style</label>
-              <HintButtonGroup
-                options={WORK_STYLES}
-                value={inputs.workStyle}
-                hints={WORK_STYLE_HINTS}
-                onChange={v => set("workStyle", v)}
-              />
+              <HintButtonGroup options={WORK_STYLES} value={inputs.workStyle} hints={WORK_STYLE_HINTS} onChange={v => set("workStyle", v)} />
               {inputs.workStyle === "Mixed" && (
                 <div style={{ marginTop: 16, background: "#0c0e0f", border: "1px solid #252820", borderRadius: 2, padding: "16px 20px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -1753,8 +1355,7 @@ ${aiRec ? `
                   </div>
                   <input type="range" min={10} max={90} step={5} value={inputs.mixedRatio}
                     onChange={e => set("mixedRatio", parseInt(e.target.value))}
-                    style={{ width: "100%", WebkitAppearance: "none", height: 2, background: `linear-gradient(to right, #c8b97a ${inputs.mixedRatio}%, #252820 ${inputs.mixedRatio}%)`, outline: "none", cursor: "pointer" }}
-                  />
+                    style={{ width: "100%", WebkitAppearance: "none", height: 2, background: `linear-gradient(to right, #c8b97a ${inputs.mixedRatio}%, #252820 ${inputs.mixedRatio}%)`, outline: "none", cursor: "pointer" }} />
                   <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 10, color: "#444", letterSpacing: "0.1em", textTransform: "uppercase" }}>
                     <span>All Hybrid</span><span>All Assigned</span>
                   </div>
@@ -1763,14 +1364,9 @@ ${aiRec ? `
             </div>
             {(inputs.workStyle === "Hybrid" || inputs.workStyle === "Mixed") && (
               <div className="form-field">
-                <label>
-                  {inputs.workStyle === "Mixed"
-                    ? "Avg Days In Office / Week (Hybrid Population)"
-                    : "Avg Days In Office / Week"}
-                </label>
+                <label>{inputs.workStyle === "Mixed" ? "Avg Days In Office / Week (Hybrid Population)" : "Avg Days In Office / Week"}</label>
                 <div className="slider-row">
-                  <input type="range" min={1} max={5} value={inputs.daysInOffice}
-                    onChange={e => set("daysInOffice", parseInt(e.target.value))} />
+                  <input type="range" min={1} max={5} value={inputs.daysInOffice} onChange={e => set("daysInOffice", parseInt(e.target.value))} />
                   <span className="slider-val">{inputs.daysInOffice}</span>
                 </div>
               </div>
@@ -1778,27 +1374,41 @@ ${aiRec ? `
             {inputs.workStyle === "Assigned" && (
               <div className="form-field">
                 <label>Days In Office</label>
-                <div style={{ padding: "10px 0", fontSize: 13, color: "#6a6760", borderLeft: "2px solid #2a2c28", paddingLeft: 10 }}>
-                  Assumed 5 days/week — all employees have dedicated desks.
-                </div>
+                <div style={{ padding: "10px 0", fontSize: 13, color: "#6a6760", borderLeft: "2px solid #2a2c28", paddingLeft: 10 }}>Assumed 5 days/week — all employees have dedicated desks.</div>
               </div>
             )}
             {inputs.workStyle === "Hoteling" && (
               <div className="form-field">
                 <label>Days In Office</label>
-                <div style={{ padding: "10px 0", fontSize: 13, color: "#6a6760", borderLeft: "2px solid #2a2c28", paddingLeft: 10 }}>
-                  Calculated at ~50% peak occupancy — typical for fully flexible environments.
-                </div>
+                <div style={{ padding: "10px 0", fontSize: 13, color: "#6a6760", borderLeft: "2px solid #2a2c28", paddingLeft: 10 }}>Calculated at ~50% peak occupancy — typical for fully flexible environments.</div>
               </div>
             )}
             <div className="form-field">
               <label>Meeting Room Need</label>
-              <HintButtonGroup
-                options={MEETING_PREFS}
-                value={inputs.meetingPref}
-                hints={MEETING_PREF_HINTS}
-                onChange={v => set("meetingPref", v)}
-              />
+              <HintButtonGroup options={MEETING_PREFS} value={inputs.meetingPref} hints={MEETING_PREF_HINTS} onChange={v => set("meetingPref", v)} />
+            </div>
+            <div className="form-field full">
+              <label>Lab space</label>
+              <div className="lab-toggle-row">
+                <button
+                  className={`btn-toggle ${!inputs.hasLab ? "active" : ""}`}
+                  onClick={() => { set("hasLab", false); set("labUSF", null); }}>None</button>
+                <button
+                  className={`btn-toggle ${inputs.hasLab ? "active" : ""}`}
+                  onClick={() => set("hasLab", true)}>Yes — add lab USF</button>
+                {inputs.hasLab && (
+                  <input
+                    type="number"
+                    className="lab-usf-input"
+                    placeholder="e.g. 5,000"
+                    value={inputs.labUSF || ""}
+                    min={0} max={500000}
+                    onChange={e => set("labUSF", e.target.value === "" ? null : parseInt(e.target.value) || 0)} />
+                )}
+              </div>
+              <div style={{ marginTop: 8, fontSize: 11, color: "#6a6760", fontStyle: "italic", lineHeight: 1.5 }}>
+                If the program includes lab space, enter the lab USF directly. Lab programs require specialized planning beyond the scope of this tool — this just adds the USF to the total.
+              </div>
             </div>
           </div>
           <button className="generate-btn" onClick={handleGenerate} disabled={loading || (!inputs.headcount && !inputs.currentSF)}>
@@ -1807,131 +1417,46 @@ ${aiRec ? `
                 {LOADING_STEPS.map((step, i) => (
                   <span key={i} className={`loading-step ${i === loadingStep ? "active" : i < loadingStep ? "done" : ""}`}>
                     {step}
-                    {i === loadingStep && (
-                      <span className="loading-dots">
-                        <span /><span /><span />
-                      </span>
-                    )}
+                    {i === loadingStep && (<span className="loading-dots"><span /><span /><span /></span>)}
                   </span>
                 ))}
               </span>
             ) : "Generate Space Strategy →"}
           </button>
           {!inputs.headcount && !inputs.currentSF && (
-            <div style={{ marginTop: 12, fontSize: 11, color: "#6a6760", textAlign: "center", fontStyle: "italic" }}>
-              Enter headcount, square footage, or both to continue
-            </div>
+            <div style={{ marginTop: 12, fontSize: 11, color: "#6a6760", textAlign: "center", fontStyle: "italic" }}>Enter headcount, square footage, or both to continue</div>
           )}
         </div>
 
         {output && (
           <div className="output-section">
-            <div className="recommendation-card rec-card-anim">
-              <div className="rec-label">Strategic Recommendation</div>
-              <div className="rec-sublabel">{(() => {
-                const hasHC = inputs.headcount && inputs.headcount > 0;
-                const hasSF = inputs.currentSF && inputs.currentSF > 0;
-                if (hasHC && hasSF) {
-                  return `Right-Sizing Audit · ${inputs.city} · ${inputs.headcount} people · ${formatNum(inputs.currentSF)} SF current · ${inputs.workStyle}`;
-                } else if (hasSF && !hasHC) {
-                  return `Capacity Evaluation · ${inputs.city} · ${formatNum(inputs.currentSF)} SF · ${inputs.workStyle}`;
-                } else {
-                  return `AI Strategist Analysis · ${inputs.city} · ${inputs.headcount} people · ${inputs.workStyle}`;
-                }
-              })()}</div>
-              {aiRec ? (
-                <>
-                  {aiRec.impact && (
-                    <div className="rec-impact">{aiRec.impact}</div>
-                  )}
-                  <div className="rec-divider" />
-                  <div className="rec-headline">{aiRec.headline}</div>
-                  <ul className="rec-bullets">
-                    {aiRec.bullets.map((b, i) => <li key={i}>{b}</li>)}
-                  </ul>
-                </>
-              ) : null}
-            </div>
+            {/* === 1. PRIMARY ANSWER === */}
+            <ComparisonBlock
+              inputs={inputs}
+              recommendedScenario={recommendedScenario}
+              tacticalOpen={tacticalOpen}
+              setTacticalOpen={setTacticalOpen}
+              breakdownOpen={breakdownOpen}
+              setBreakdownOpen={setBreakdownOpen}
+              capacityEstimates={capacityEstimates}
+            />
 
-            {(() => {
-              const action = computeRecommendedAction(inputs, output);
-              if (!action) return null;
-              const recProg = computeProgram({ ...inputs, workStyle: action.recStyle }, action.recStyle, action.recDensity);
-              const recCost = getAnnualCost(recProg.totalSF, inputs.city);
-              const sfPct = Math.round((action.sfDelta / output.totalSF) * 100);
+            {/* === 2. AI INTERPRETATION === */}
+            {aiInterpretation && (
+              <div className="interpretation-block">
+                <div className="interpretation-label">Market Context</div>
+                <div className="interpretation-text">{aiInterpretation}</div>
+              </div>
+            )}
 
-              // Compute tactical changes
-              const deskDelta = output.deskCount - recProg.deskCount;
-              const roomDelta = output.meetingRooms - recProg.meetingRooms;
-              const largeRoomDelta = output.largeRooms - recProg.largeRooms;
-              const currentSFPerDesk = Math.round(output.deskSF / output.deskCount);
-              const recSFPerDesk = Math.round(recProg.deskSF / recProg.deskCount);
-
-              return (
-                <div className="action-block">
-                  <div className="action-label">Recommended Action</div>
-                  <div className="action-section">
-                    <div className="action-section-label">Primary Move</div>
-                    <div className="action-line">
-                      {action.recStyle !== inputs.workStyle
-                        ? `Shift to ${action.recStyle} programming — ${inputs.headcount} headcount no longer requires ${output.deskCount} dedicated desks`
-                        : `Apply ${action.recDensity.toLowerCase()} density — your ${inputs.daysInOffice}-day attendance pattern doesn't justify ${currentSFPerDesk} SF/desk`}
-                    </div>
-                  </div>
-                  <div className="action-section">
-                    <div className="action-section-label">Tactical Changes</div>
-                    {deskDelta > 0 && (
-                      <div className="action-line">Reduce desks from {output.deskCount} to {recProg.deskCount} ({deskDelta} fewer)</div>
-                    )}
-                    {currentSFPerDesk !== recSFPerDesk && (
-                      <div className="action-line">Target {recSFPerDesk} SF per desk (currently {currentSFPerDesk} SF)</div>
-                    )}
-                    {roomDelta > 0 && (
-                      <div className="action-line">Reduce meeting rooms from {output.meetingRooms} to {recProg.meetingRooms} ({roomDelta} fewer)</div>
-                    )}
-                    {largeRoomDelta > 0 && (
-                      <div className="action-line">Convert {largeRoomDelta} large conference room{largeRoomDelta > 1 ? "s" : ""} to smaller huddle spaces — large rooms above 8 seats are chronically underused</div>
-                    )}
-                    {deskDelta <= 0 && roomDelta <= 0 && (
-                      <div className="action-line">Reallocate ~{formatSF(action.sfDelta)} from low-utilization zones to collaboration and amenity space</div>
-                    )}
-                  </div>
-                  <div className="action-section">
-                    <div className="action-section-label">Financial Impact</div>
-                    <div className="action-line">Recover {formatSF(action.sfDelta)} (~{sfPct}% of current footprint)</div>
-                    <div className="action-line">Stop overpaying ~{formatCost(action.costDelta)}/yr in unused capacity</div>
-                  </div>
-                  <div className="action-section" style={{ marginBottom: 20 }}>
-                    <div className="action-section-label">Target State</div>
-                    <div className="action-line" style={{ fontFamily: "'DM Mono', monospace", color: "#8bb87a", fontSize: 13 }}>
-                      {formatSF(recProg.totalSF)} · {recProg.deskCount} desks · {formatCost(recCost)}/yr
-                    </div>
-                  </div>
-                  <button className="action-apply-btn" onClick={() => {
-                    setScenarioStyle(action.recStyle);
-                    setScenarioDensity(action.recDensity);
-                    setScenarioOpen(true);
-                    setTimeout(() => {
-                      document.querySelector(".scenario-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
-                    }, 100);
-                  }}>
-                    Apply this scenario →
-                  </button>
-                </div>
-              );
-            })()}
-
-            <div className="metrics-row metrics-anim">
+            {/* === 3. METRIC REFERENCE STRIP === */}
+            <div className="metrics-row">
               {[
-                { label: "Total SF", value: formatSF(currentProg.totalSF), sub: `${inputs.city}` },
-                { label: "Desk Count", value: formatNum(currentProg.deskCount), sub: inputs.headcount ? `of ${inputs.headcount} headcount` : `~${effectiveHC} estimated capacity` },
+                { label: "Total RSF", value: formatSF(currentProg.totalRSF), sub: `${formatNum(currentProg.totalUSF)} USF` },
+                { label: "Desk Count", value: formatNum(currentProg.deskCount), sub: inputs.headcount ? `of ${inputs.headcount} HC` : `~${effectiveHC} est. capacity` },
                 { label: "Meeting Rooms", value: formatNum(currentProg.meetingRooms), sub: `${currentProg.smallRooms}S · ${currentProg.medRooms}M · ${currentProg.largeRooms}L` },
-                {
-                  label: "Annual Cost Est.",
-                  value: formatCost(getAnnualCost(currentProg.totalSF, inputs.city)),
-                  sub: "base rent only",
-                  tooltip: "Base rent only. Calculated as recommended SF × the city's blended Class A/B asking rate (Q1 2026). Excludes operating expenses, utilities, janitorial, IT, FF&E, tenant improvements, and brokerage fees. Add 30–50% for fully loaded occupancy cost."
-                }
+                { label: "Annual Rent Est.", value: formatCostBig(getAnnualCost(currentProg.totalRSF, inputs.city)), sub: "base rent on RSF",
+                  tooltip: "Base rent only. Calculated as Total RSF × the city's blended Class A/B asking rate (Q1 2026). Most leases are quoted in RSF. Excludes operating expenses, utilities, janitorial, IT, FF&E, tenant improvements, and brokerage fees. Add 30–50% for fully loaded occupancy cost." }
               ].map((m, i) => (
                 <div key={i} className="metric-card">
                   <div className="metric-label">
@@ -1949,129 +1474,30 @@ ${aiRec ? `
               ))}
             </div>
 
-            {inputs.headcount && inputs.headcount > 0 && inputs.currentSF && inputs.currentSF > 0 && (() => {
-              const sfDelta = inputs.currentSF - currentProg.totalSF;
-              const sfPct = Math.round((sfDelta / inputs.currentSF) * 100);
-              const costDelta = getAnnualCost(Math.abs(sfDelta), inputs.city);
-              const isOversized = sfDelta > 0;
-              const accentColor = isOversized ? "#c8876a" : "#7a9cb8";
-              return (
-                <div style={{
-                  background: "#141618",
-                  border: "1px solid #252820",
-                  borderLeft: `3px solid ${accentColor}`,
-                  borderRadius: 2,
-                  padding: "24px 28px",
-                  marginBottom: 32,
-                  animation: "fadeUp 0.5s ease 0.35s both"
-                }}>
-                  <div style={{ fontFamily: "'Syne', sans-serif", fontSize: 10, fontWeight: 700, letterSpacing: "0.2em", textTransform: "uppercase", color: accentColor, marginBottom: 16 }}>
-                    Right-Sizing Audit
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 24, alignItems: "baseline" }}>
-                    <div>
-                      <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "#6a6760", marginBottom: 6 }}>Your Current</div>
-                      <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 22, color: "#e8e4dc", lineHeight: 1 }}>{formatSF(inputs.currentSF)}</div>
-                      <div style={{ fontSize: 11, color: "#6a6760", marginTop: 4 }}>{Math.round(inputs.currentSF / inputs.headcount)} SF/person</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "#6a6760", marginBottom: 6 }}>Recommended</div>
-                      <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 22, color: "#c8b97a", lineHeight: 1 }}>{formatSF(currentProg.totalSF)}</div>
-                      <div style={{ fontSize: 11, color: "#6a6760", marginTop: 4 }}>{Math.round(currentProg.totalSF / inputs.headcount)} SF/person</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "#6a6760", marginBottom: 6 }}>Variance</div>
-                      <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 22, color: accentColor, lineHeight: 1 }}>
-                        {isOversized ? "+" : "−"}{Math.abs(sfPct)}%
-                      </div>
-                      <div style={{ fontSize: 11, color: accentColor, marginTop: 4 }}>
-                        {isOversized ? `~${formatCost(costDelta)} avoidable/yr` : `~${formatCost(costDelta)} additional/yr`}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
+            {/* === 4. SCENARIO EXPLORER (visible by default) === */}
+            <ScenarioPanel
+              inputs={resolvedInputs || inputs}
+              activeStyle={scenarioStyle}
+              activeDensity={scenarioDensity}
+              onStyleChange={s => setScenarioStyle(s)}
+              onDensityChange={d => setScenarioDensity(d)}
+              recommendedStyle={recommendedScenario.style}
+              recommendedDensity={recommendedScenario.density}
+            />
 
-            {capacityEstimates && !inputs.headcount && inputs.currentSF && (() => {
-              const styles = [
-                { key: "Assigned", color: "#7a9cb8", note: "Traditional offices · 1:1 desk ratio" },
-                { key: "Hybrid",   color: "#c8b97a", note: "3-day attendance · shared desks" },
-                { key: "Hoteling", color: "#8bb87a", note: "Fully unassigned · maximum density" }
-              ];
-              const annualCost = getAnnualCost(inputs.currentSF, inputs.city);
-              return (
-                <div style={{
-                  background: "#141618",
-                  border: "1px solid #252820",
-                  borderLeft: "3px solid #c8b97a",
-                  borderRadius: 2,
-                  padding: "24px 28px",
-                  marginBottom: 32,
-                  animation: "fadeUp 0.5s ease 0.35s both"
-                }}>
-                  <div style={{ fontFamily: "'Syne', sans-serif", fontSize: 10, fontWeight: 700, letterSpacing: "0.2em", textTransform: "uppercase", color: "#c8b97a", marginBottom: 6 }}>
-                    Capacity Analysis
-                  </div>
-                  <div style={{ fontSize: 12, color: "#8a8478", marginBottom: 20, fontStyle: "italic" }}>
-                    {formatSF(inputs.currentSF)} in {inputs.city} · {formatCost(annualCost)}/yr at current rates
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
-                    {styles.map(s => (
-                      <div key={s.key} style={{
-                        background: "#0c0e0f",
-                        border: "1px solid #252820",
-                        borderTop: `2px solid ${s.color}`,
-                        borderRadius: 2,
-                        padding: "16px 18px",
-                      }}>
-                        <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: s.color, marginBottom: 8, fontWeight: 600 }}>
-                          {s.key}
-                        </div>
-                        <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 26, color: "#f0ece2", lineHeight: 1, marginBottom: 4 }}>
-                          ~{capacityEstimates[s.key]}
-                        </div>
-                        <div style={{ fontSize: 11, color: "#6a6760", marginBottom: 8 }}>people</div>
-                        <div style={{ fontSize: 10, color: "#6a6760", lineHeight: 1.5, fontStyle: "italic" }}>
-                          {s.note}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div style={{ marginTop: 16, fontSize: 11, color: "#4a4f48", fontStyle: "italic", lineHeight: 1.55 }}>
-                    Estimates assume {inputs.meetingPref.toLowerCase()} meeting needs. Capacity varies with your actual attendance pattern and team composition.
-                  </div>
-                </div>
-              );
-            })()}
-
-            <div style={{ marginBottom: 32 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-                <div style={{ flex: 1, height: 1, background: "#1e2022" }} />
-                <span style={{ fontSize: 10, color: "#3a3c38", letterSpacing: "0.14em", textTransform: "uppercase", whiteSpace: "nowrap" }}>or explore manually</span>
-                <div style={{ flex: 1, height: 1, background: "#1e2022" }} />
-              </div>
-              <button className="scenario-reveal-btn" onClick={() => setScenarioOpen(o => !o)}>
-                {scenarioOpen ? "▲ Close" : "Adjust parameters manually →"}
-              </button>
-            </div>
-            <div className={`scenario-panel ${scenarioOpen ? "open" : ""}`}>
-              <ScenarioPanel inputs={inputs} activeStyle={scenarioStyle} activeDensity={scenarioDensity}
-                onStyleChange={s => setScenarioStyle(s)}
-                onDensityChange={d => setScenarioDensity(d)} />
-              <SpaceBar program={currentProg} aiRec={aiRec} />
-            </div>
-
+            {/* === 5. EXPORT === */}
             <div className="export-section">
               <h3>Export</h3>
               <div className="summary-grid">
                 {[
-                  ["Headcount", formatNum(inputs.headcount)],
+                  ["Headcount", formatNum(inputs.headcount || effectiveHC)],
                   ["Work Style", inputs.workStyle],
                   ["Days In Office", `${inputs.daysInOffice}/week`],
                   ["Meeting Need", inputs.meetingPref],
-                  ["Total SF", formatSF(output.totalSF)],
-                  ["Annual Cost", formatCost(getAnnualCost(output.totalSF, inputs.city)) + "/yr"]
+                  ...(inputs.hasLab && inputs.labUSF ? [["Lab USF", formatSF(inputs.labUSF)]] : []),
+                  ["Total USF", formatSF(output.totalUSF)],
+                  ["Total RSF", formatSF(output.totalRSF)],
+                  ["Annual Rent (RSF)", formatCostBig(getAnnualCost(output.totalRSF, inputs.city)) + "/yr"]
                 ].map(([l, v]) => (
                   <div key={l} className="summary-line">
                     <span>{l}</span><span>{v}</span>
@@ -2082,7 +1508,7 @@ ${aiRec ? `
             </div>
 
             <div style={{ marginTop: 28, paddingTop: 20, borderTop: "1px solid #1e2022", fontSize: 11, color: "#4a4f48", lineHeight: 1.7, fontStyle: "italic" }}>
-              Cost estimates use blended Class A/B office rates from CBRE, JLL, Cushman &amp; Wakefield, and Colliers Q1 2026 market reports. Rates current as of {COST_DATA_AS_OF}. Actual lease economics vary by submarket, building class, lease term, and concessions. OptiSpace Lite provides directional analysis only — not a substitute for broker engagement.
+              Cost estimates use blended Class A/B office rates from CBRE, JLL, Cushman &amp; Wakefield, Avison Young, and Colliers Q1 2026 market reports. Rates current as of {COST_DATA_AS_OF}, last verified {COST_VERIFIED_DATE}, applied to Total RSF. Actual lease economics vary by submarket, building class, lease term, and concessions. OptiSpace Lite provides directional analysis only — not a substitute for broker engagement, design programming, or detailed space planning.
             </div>
           </div>
         )}

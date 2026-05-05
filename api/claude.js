@@ -1,125 +1,126 @@
-// Vercel serverless function — proxies requests to Anthropic API
-// API key is read from environment variable (never exposed to browser)
+// api/claude.js — OptiSpace Lite v1.1
+// Vercel serverless function. Generates a single interpretation paragraph that
+// explains the market and behavioral context behind the deterministic recommendation.
+// Does NOT make recommendations — that job belongs to the deterministic comparison block in App.jsx.
+
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({ error: "API key not configured" });
-  }
-
   try {
-    const { inputs, originalInputs, capacityEstimates, program } = req.body;
+    const { inputs, originalInputs, capacityEstimates, recommendedScenario, program } = req.body;
 
-    // Determine which mode based on what the user originally provided
-    // originalInputs reflects the user's actual form values (HC may be null in SF-only mode)
-    const orig = originalInputs || inputs;
-    const userProvidedHC = orig.headcount && orig.headcount > 0;
-    const userProvidedSF = orig.currentSF && orig.currentSF > 0;
+    const hasHC = originalInputs.headcount && originalInputs.headcount > 0;
+    const hasSF = originalInputs.currentSF && originalInputs.currentSF > 0;
 
-    const isAudit = userProvidedHC && userProvidedSF;
-    const isCapacityEval = userProvidedSF && !userProvidedHC;
-    const isPlanning = userProvidedHC && !userProvidedSF;
+    let mode;
+    if (hasHC && hasSF) mode = "right_sizing_audit";
+    else if (hasSF && !hasHC) mode = "capacity_evaluation";
+    else mode = "forward_planning";
 
-    const sfDelta = isAudit ? orig.currentSF - program.totalSF : null;
-    const sfPct = isAudit ? Math.round((sfDelta / orig.currentSF) * 100) : null;
+    const systemPrompt = `You are a senior corporate real estate strategist writing one short, opinionated paragraph of MARKET CONTEXT for a workplace planner.
 
-    const baseContext = `You are a senior workplace strategist with 15 years of corporate real estate experience. A client has given you the following space program data:
+CRITICAL CONSTRAINTS — the deterministic engine in the UI has already produced and displayed:
+- The recommended program (total SF, desks, meeting rooms, annual cost)
+- The comparison to the user's current state or to a traditional 1:1 baseline
+- A tactical breakdown of changes (specific desk count deltas, room conversions, SF per desk targets)
+- Financial impact (savings or shortage in dollars per year)
 
-- Work style: ${inputs.workStyle}
-- Average days in office: ${inputs.daysInOffice}/week
-- Meeting room preference: ${inputs.meetingPref}
-- Location: ${inputs.city}`;
+Your job is the OPPOSITE of the deterministic engine. You write ONE tight paragraph (2-3 sentences, never more) that gives the user the ONE THING THAT MATTERS MOST about why these numbers look this way. Pick the sharpest take and make it. Don't survey the topic — commit to a point of view.
 
-    let modeContext = "";
+Possible angles (pick ONE per response):
+- The market dynamic that makes timing matter (e.g., specific city sublease conditions in Q1 2026, lease leverage windows)
+- The behavioral pattern that drives the variance (e.g., conference room overbuilding, peak occupancy reality vs assumed)
+- The strategic tradeoff the user is implicitly making (e.g., operational maturity required for hoteling, change management cost)
 
-    if (isAudit) {
-      modeContext = `
-- Company headcount: ${orig.headcount} people
-- Calculated total SF (recommended): ${program.totalSF.toLocaleString()} SF
-- Desk count: ${program.deskCount}
-- Meeting rooms: ${program.meetingRooms} (${program.smallRooms} small, ${program.medRooms} medium, ${program.largeRooms} large)
-- Annual occupancy cost estimate: $${program.annualCost.toLocaleString()}
-- Current footprint: ${orig.currentSF.toLocaleString()} SF
-- Delta vs. recommended: ${sfDelta > 0 ? "+" : ""}${sfDelta.toLocaleString()} SF (${sfPct > 0 ? "+" : ""}${sfPct}%)
-- Current SF per person: ${Math.round(orig.currentSF / orig.headcount)} SF/person
-- Recommended SF per person: ${Math.round(program.totalSF / orig.headcount)} SF/person
+You MUST NOT:
+- Recommend specific actions (no "you should reduce desks", "consider hoteling", "shift to hybrid")
+- Echo or restate the deterministic recommendation
+- Use bullet points, headers, or lists — output is ONE flowing paragraph
+- Write more than 3 sentences
+- Hedge with phrases like "it depends" or "varies by team"
+- Use phrases like "we recommend", "you should", "consider doing"
 
-This is a RIGHT-SIZING AUDIT. The client has an existing space and wants to know if it's appropriately sized. Frame your recommendation as an audit finding with specific numerical comparisons. The headline should call out the current vs. recommended gap directly. The impact should quantify the dollar opportunity (savings if oversized, additional cost if undersized).`;
-    } else if (isCapacityEval) {
-      const cap = capacityEstimates || {};
-      modeContext = `
-- Available footprint: ${orig.currentSF.toLocaleString()} SF
-- Estimated capacity at Assigned seating: ~${cap.Assigned} people
-- Estimated capacity at Hybrid (3 days/week): ~${cap.Hybrid} people
-- Estimated capacity at Hoteling: ~${cap.Hoteling} people
-- Annual occupancy cost at this footprint: $${program.annualCost.toLocaleString()}
+You SHOULD:
+- Write in confident, executive prose — the voice of a senior advisor with a take
+- Lead with the sharpest observation, not setup
+- Be intellectually honest but pointed
 
-This is a CAPACITY EVALUATION. The client has a fixed footprint (e.g. evaluating a lease, inheriting a space, or working with a broker) and wants to know what headcount this space can support across different work styles. The headline should articulate the realistic capacity range. The impact should anchor on a single defensible number (typically Hybrid). The bullets should help the user think about which work style fits their culture.`;
+Output: a single JSON object with one field, "interpretation", containing the paragraph as a string. No other fields. No preamble. No code fences.`;
+
+    let userMessage;
+
+    if (mode === "right_sizing_audit") {
+      const sfDelta = originalInputs.currentSF - program.totalSF;
+      const sfPct = Math.round((sfDelta / originalInputs.currentSF) * 100);
+      const sfPerPerson = Math.round(originalInputs.currentSF / originalInputs.headcount);
+      const recSFPerPerson = Math.round(program.totalSF / originalInputs.headcount);
+
+      userMessage = `Right-sizing audit context:
+
+City: ${originalInputs.city}
+Headcount: ${originalInputs.headcount}
+Current SF: ${originalInputs.currentSF} (${sfPerPerson} SF/person)
+Recommended SF: ${program.totalSF} (${recSFPerPerson} SF/person)
+Variance: ${sfPct > 0 ? "+" : ""}${sfPct}% ${sfPct > 0 ? "oversized" : "undersized"}
+Work Style: ${originalInputs.workStyle}
+${originalInputs.workStyle === "Hybrid" ? `Days in office: ${originalInputs.daysInOffice}/week` : ""}
+Meeting need: ${originalInputs.meetingPref}
+
+Write 2-3 sentences. Lead with the sharpest market or behavioral observation that explains why a footprint at this profile shows this kind of variance. Pick ONE angle — don't survey. Do not recommend actions.`;
+    } else if (mode === "capacity_evaluation") {
+      userMessage = `Capacity evaluation context:
+
+City: ${originalInputs.city}
+Available SF: ${originalInputs.currentSF}
+Capacity at Assigned: ~${capacityEstimates.Assigned} people
+Capacity at Hybrid (3-day): ~${capacityEstimates.Hybrid} people
+Capacity at Hoteling: ~${capacityEstimates.Hoteling} people
+Stated work style: ${originalInputs.workStyle}
+Meeting need: ${originalInputs.meetingPref}
+
+Write 2-3 sentences. Lead with the sharpest take on what really separates these capacity options in practice — operational maturity, change management cost, or why the wide range exists. Pick ONE angle. Do not recommend a work style.`;
     } else {
-      // Planning mode
-      modeContext = `
-- Company headcount: ${orig.headcount} people
-- Calculated total SF (recommended): ${program.totalSF.toLocaleString()} SF
-- Desk count: ${program.deskCount}
-- Meeting rooms: ${program.meetingRooms} (${program.smallRooms} small, ${program.medRooms} medium, ${program.largeRooms} large)
-- Annual occupancy cost estimate: $${program.annualCost.toLocaleString()}
-- Desk ratio: ${program.deskRatio}
-- Peak occupancy: ${program.peakOccupancy}
+      userMessage = `Forward-planning context:
 
-This is a FORWARD-LOOKING PROGRAMMING analysis. The client is sizing a new space or planning ahead. Frame your recommendation as strategic guidance for the upcoming decision. The headline should articulate the main insight about their programming. The impact should highlight a key optimization opportunity.`;
+City: ${originalInputs.city}
+Headcount: ${originalInputs.headcount}
+Work Style: ${originalInputs.workStyle}
+${originalInputs.workStyle === "Hybrid" ? `Days in office: ${originalInputs.daysInOffice}/week` : ""}
+Meeting need: ${originalInputs.meetingPref}
+Recommended SF: ${program.totalSF}
+Traditional 1:1 SF would be: significantly higher
+
+Write 2-3 sentences. Lead with the sharpest behavioral or market observation about why traditional 1:1 sizing inflates footprints for this attendance pattern, OR what the city-specific market dynamic in Q1 2026 means for timing. Pick ONE angle. Do not tell the user what to do.`;
     }
 
-    const prompt = `${baseContext}${modeContext}
-
-Respond with ONLY a JSON object in this exact format (no markdown, no extra text):
-{
-  "headline": "one sharp sentence summarizing the main insight and opportunity, written for a VP or CFO",
-  "impact": "one short punchy sentence with a specific dollar or percentage figure — e.g. 'You could reduce occupancy costs by ~$340K annually.' or 'You're likely carrying 18% excess space.'",
-  "bullets": [
-    "specific actionable insight #1 with numbers",
-    "specific actionable insight #2 with numbers",
-    "specific actionable insight #3 with numbers"
-  ]
-}
-
-Make the insights genuinely useful — not generic alerts. Reference actual numbers. Sound like a strategist in a meeting, not a software tool.
-
-CRITICAL FRAMING: When the analysis reveals an opportunity to reduce cost, frame the impact as money currently being WASTED, not as potential savings. "You are likely overpaying ~$152K/yr for unused space" lands harder than "You could save ~$152K annually." Use active loss-framing language: "carrying," "overpaying," "absorbing," "leaking," "tied up in."
-
-Also: be opinionated. You are a strategist with 15 years of experience, not a calculator. If the data suggests the client is overbuilt on conference rooms, say so directly: "Most companies your size overbuild large conference rooms by 2-3x." If hybrid attendance doesn't justify their current desk ratio, say it: "A 1:1 desk ratio is rarely justified at 3-day attendance patterns." Lead with conviction.`;
-
-    const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01"
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-5",
-        max_tokens: 1000,
-        messages: [{ role: "user", content: prompt }]
-      })
+    const response = await client.messages.create({
+      model: "claude-sonnet-4-5",
+      max_tokens: 600,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userMessage }]
     });
 
-    if (!anthropicResponse.ok) {
-      const errorText = await anthropicResponse.text();
-      console.error("Anthropic API error:", errorText);
-      return res.status(anthropicResponse.status).json({ error: "Anthropic API error" });
-    }
+    let text = response.content[0].text.trim();
+    // Strip code fences if model added them despite instructions
+    text = text.replace(/^```json\s*/, "").replace(/```\s*$/, "").trim();
 
-    const data = await anthropicResponse.json();
-    const text = data.content?.find(b => b.type === "text")?.text || "";
-    const clean = text.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(clean);
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (e) {
+      // If model returned a bare paragraph instead of JSON, wrap it
+      parsed = { interpretation: text };
+    }
 
     return res.status(200).json(parsed);
   } catch (error) {
-    console.error("Handler error:", error);
-    return res.status(500).json({ error: "Internal server error" });
+    console.error("Claude API error:", error);
+    return res.status(500).json({ error: "Internal server error", message: error.message });
   }
 }
