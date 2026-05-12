@@ -147,7 +147,7 @@ function computeProgram(inputs, scenarioStyle, scenarioDensity) {
   const deskSF = deskCount * sfPerDesk;
 
   // === Conference, Vendor, Collab Rooms ===
-  const meetingMultiplier = meetingPref === "Light" ? 0.08 : meetingPref === "Moderate" ? 0.12 : 0.16;
+  const meetingMultiplier = meetingPref === "Light" ? 0.04 : meetingPref === "Moderate" ? 0.06 : 0.08;
   const meetingRooms = Math.round(headcount * meetingMultiplier);
   const smallRooms = Math.round(meetingRooms * 0.5);   // 4-6 pax
   const medRooms = Math.round(meetingRooms * 0.35);    // 8-10 pax
