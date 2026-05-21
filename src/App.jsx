@@ -747,10 +747,22 @@ function ScenarioPanel({ inputs, activeStyle, activeDensity, onStyleChange, onDe
 }
 
 function getRecommendedScenario(inputs) {
+  // Honor the user's work-style choice. The tool produces a program FOR their selection.
+  // A separate "alternative work-style" insight (see getAlternativeScenario) surfaces
+  // the savings available from changing work-style — without overriding the user's input.
   const currentStyle = inputs.workStyle;
-  if (currentStyle === "Assigned") return { style: "Hybrid", density: "Balanced" };
+  if (currentStyle === "Assigned") return { style: "Assigned", density: "Balanced" };
   if (currentStyle === "Hybrid" || currentStyle === "Mixed") return { style: currentStyle, density: "Aggressive" };
   return { style: "Hoteling", density: "Aggressive" };
+}
+
+// Secondary insight: what the user could save by shifting to a more efficient work-style.
+// Surfaced separately from the main comparison so it doesn't override the user's choice.
+function getAlternativeScenario(inputs) {
+  const currentStyle = inputs.workStyle;
+  if (currentStyle === "Assigned") return { style: "Hybrid", density: "Balanced" };
+  if (currentStyle === "Hybrid") return { style: "Hoteling", density: "Aggressive" };
+  return null; // Mixed and Hoteling already at the efficient end
 }
 
 function computeTacticalChanges(baselineProg, recommendedProg, baselineStyle, recommendedStyle) {
@@ -1103,14 +1115,29 @@ function ComparisonBlock({ inputs, recommendedScenario, tacticalOpen, setTactica
   const naiveCost = getAnnualCost(naiveProg.totalRSF, inputs.city);
   const rsfSavings = naiveProg.totalRSF - recommendedProg.totalRSF;
   const costSavings = naiveCost - recommendedCost;
-  const savingsPct = Math.round((rsfSavings / naiveProg.totalRSF) * 100);
+  const savingsPct = naiveProg.totalRSF > 0 ? Math.round((rsfSavings / naiveProg.totalRSF) * 100) : 0;
   const naiveRSFPerPerson = Math.round(naiveProg.totalRSF / inputs.headcount);
   const headlinePrimary = `${inputs.headcount} people need ${formatNum(recommendedProg.totalRSF)} RSF`;
-  const headlineSecondary = rsfSavings > 0
-    ? `${formatCostBig(recommendedCost)}/yr · ${formatCostBig(costSavings)}/yr leaner than traditional 1:1 sizing`
-    : `${formatCostBig(recommendedCost)}/yr`;
+  const headlineSecondary = inputs.workStyle === "Assigned"
+    ? `${formatCostBig(recommendedCost)}/yr`
+    : (rsfSavings > 0
+        ? `${formatCostBig(recommendedCost)}/yr · ${formatCostBig(costSavings)}/yr leaner than traditional 1:1 sizing`
+        : `${formatCostBig(recommendedCost)}/yr`);
   const baselineProg = computeProgram(inputs, inputs.workStyle, "Balanced");
   const tacticalChanges = computeTacticalChanges(baselineProg, recommendedProg, inputs.workStyle, recommendedScenario.style);
+
+  // Alternative-style insight: secondary callout showing what the user could save by shifting work-style.
+  // Only computed for input styles where a more efficient alternative exists (Assigned, Hybrid).
+  const altScenario = getAlternativeScenario(inputs);
+  const altProg = altScenario ? computeProgram({ ...inputs, workStyle: altScenario.style }, altScenario.style, altScenario.density) : null;
+  const altCost = altProg ? getAnnualCost(altProg.totalRSF, inputs.city) : null;
+  const altSavings = altProg ? recommendedCost - altCost : null;
+  const altPct = altProg && recommendedProg.totalRSF > 0 ? Math.round(((recommendedProg.totalRSF - altProg.totalRSF) / recommendedProg.totalRSF) * 100) : null;
+
+  // When user picks Assigned, the "Traditional 1:1" column IS the recommendation (same program).
+  // Skip the redundant comparison grid in that case — show just the program, with the alternative
+  // callout below it as a secondary insight.
+  const userPickedAssigned = inputs.workStyle === "Assigned";
 
   return (
     <div className="comparison-block">
@@ -1119,23 +1146,33 @@ function ComparisonBlock({ inputs, recommendedScenario, tacticalOpen, setTactica
       <div className="comparison-headline">{headlinePrimary}</div>
       {headlineSecondary && <div className="comparison-headline-savings">{headlineSecondary}</div>}
       <EmbeddedSpaceBar program={recommendedProg} />
-      <div className="comparison-grid">
-        <div className="comparison-col">
-          <div className="comparison-col-label">Traditional 1:1 Sizing</div>
-          <div className="comparison-primary-stat">{formatNum(naiveProg.totalRSF)} RSF</div>
-          <div className="comparison-secondary-stat">{naiveRSFPerPerson} SF/person · {formatCostBig(naiveCost)}/yr</div>
+      {!userPickedAssigned && (
+        <div className="comparison-grid">
+          <div className="comparison-col">
+            <div className="comparison-col-label">Traditional 1:1 Sizing</div>
+            <div className="comparison-primary-stat">{formatNum(naiveProg.totalRSF)} RSF</div>
+            <div className="comparison-secondary-stat">{naiveRSFPerPerson} SF/person · {formatCostBig(naiveCost)}/yr</div>
+          </div>
+          <div className="comparison-col recommended">
+            <div className="comparison-col-label">Recommended</div>
+            <div className="comparison-primary-stat">{formatNum(recommendedProg.totalRSF)} RSF</div>
+            <div className="comparison-secondary-stat">{formatNum(recommendedProg.totalUSF)} USF · {formatCostBig(recommendedCost)}/yr</div>
+          </div>
+          <div className="comparison-col delta-savings">
+            <div className="comparison-col-label">Savings vs 1:1</div>
+            <div className="comparison-primary-stat">−{formatCostBig(costSavings)}/yr</div>
+            <div className="comparison-secondary-stat">${Math.round(costSavings / inputs.headcount).toLocaleString()}/person/yr · −{savingsPct}% leaner footprint</div>
+          </div>
         </div>
-        <div className="comparison-col recommended">
-          <div className="comparison-col-label">Recommended</div>
-          <div className="comparison-primary-stat">{formatNum(recommendedProg.totalRSF)} RSF</div>
-          <div className="comparison-secondary-stat">{formatNum(recommendedProg.totalUSF)} USF · {formatCostBig(recommendedCost)}/yr</div>
+      )}
+      {altProg && altSavings > 0 && (
+        <div className="alternative-callout" style={{ marginTop: 16, padding: "14px 16px", borderLeft: "3px solid #c8b97a", background: "rgba(200, 185, 122, 0.06)" }}>
+          <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c8b97a", marginBottom: 6 }}>Alternative work-style</div>
+          <div style={{ fontSize: 14, color: "#e8e6df", lineHeight: 1.5 }}>
+            Shifting from <strong>{inputs.workStyle}</strong> to <strong>{altScenario.style}</strong> would reduce the program to <strong>{formatNum(altProg.totalRSF)} RSF</strong> ({formatCostBig(altCost)}/yr) — about <strong>{formatCostBig(altSavings)}/yr</strong> leaner ({altPct}% smaller footprint). This is a work-style change, not a calibration tweak.
+          </div>
         </div>
-        <div className="comparison-col delta-savings">
-          <div className="comparison-col-label">Difference</div>
-          <div className="comparison-primary-stat">−{formatCostBig(costSavings)}/yr</div>
-          <div className="comparison-secondary-stat">${Math.round(costSavings / inputs.headcount).toLocaleString()}/person/yr · −{savingsPct}% leaner footprint</div>
-        </div>
-      </div>
+      )}
       <div className="expandable-row">
         <button className="tactical-toggle" onClick={() => setTacticalOpen(o => !o)}>
           {tacticalOpen ? "▲ Hide what needs to change" : "▼ What needs to change"}
