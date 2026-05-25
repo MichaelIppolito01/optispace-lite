@@ -143,11 +143,29 @@ function computeProgram(inputs, scenarioStyle, scenarioDensity) {
   const deskCount = Math.round(headcount * deskRatio * densityMultiplier);
 
   // === A&R Seats (Assigned & Reservable) ===
-  const sfPerDesk = style === "Assigned" ? 150 : style === "Hybrid" ? 130 : style === "Mixed" ? 140 : 110;
+  // Workstation footprint ONLY — physical seat + furniture envelope. Does NOT include
+  // immediate circulation (captured separately in 33% circulation calc), meeting rooms,
+  // service spaces, or common areas. Blended midpoints from Q1 2026 industry data
+  // (CBRE, JLL, BOMA, workplace planning calculators):
+  //   Assigned: 80 SF — blend of 10×10 private offices (~100 SF) and 6×8 / 8×8 cubicles (~48-64 SF)
+  //   Hybrid:   55 SF — dedicated 6×6 to 6×8 cube standard
+  //   Mixed:    65 SF — weighted midpoint of Assigned and Hybrid
+  //   Hoteling: 40 SF — hot desk / touchdown station, 6×6 or smaller
+  // Note: prior values (150/130/140/110) conflated workstation footprint with per-HC
+  // total allocation, causing programs to overstate by ~25-30%. Edit capability for
+  // company-specific overrides is v1.3 priority (Brian/Teri feedback).
+  const sfPerDesk = style === "Assigned" ? 80 : style === "Hybrid" ? 55 : style === "Mixed" ? 65 : 40;
   const deskSF = deskCount * sfPerDesk;
 
   // === Conference, Vendor, Collab Rooms ===
-  const meetingMultiplier = meetingPref === "Light" ? 0.04 : meetingPref === "Moderate" ? 0.06 : 0.08;
+  // Multipliers calibrated against current hybrid programs (Q1 2026):
+  // Light    = 1 room per ~20 HC (multiplier 0.05) — async-heavy, low formal meeting culture
+  // Moderate = 1 room per ~14 HC (multiplier 0.07) — typical hybrid program
+  // Heavy    = 1 room per ~11 HC (multiplier 0.09) — meeting-intensive (sales/consulting/exec)
+  // Note: at small HC, Math.round compresses tier differences. The tier spacing becomes
+  // visibly distinct around 100+ HC. Mix logic (small/medium/large + phone booths) is
+  // currently static and does not scale with meeting culture — separate v1.2 item.
+  const meetingMultiplier = meetingPref === "Light" ? 0.05 : meetingPref === "Moderate" ? 0.07 : 0.09;
   const meetingRooms = Math.round(headcount * meetingMultiplier);
   const smallRooms = Math.round(meetingRooms * 0.5);   // 4-6 pax
   const medRooms = Math.round(meetingRooms * 0.35);    // 8-10 pax
@@ -721,14 +739,14 @@ function ScenarioPanel({ inputs, activeStyle, activeDensity, onStyleChange, onDe
           <div className="scenario-stat"><span className="scenario-stat-label">Total RSF</span><span className="scenario-stat-val">{formatSF(recommended.totalRSF)}</span></div>
           <div className="scenario-stat"><span className="scenario-stat-label">Total USF</span><span className="scenario-stat-val">{formatSF(recommended.totalUSF)}</span></div>
           <div className="scenario-stat"><span className="scenario-stat-label">Desks</span><span className="scenario-stat-val">{formatNum(recommended.deskCount)}</span></div>
-          <div className="scenario-stat"><span className="scenario-stat-label">Annual Rent</span><span className="scenario-stat-val">{formatCostBig(recommendedCost)}</span></div>
+          <div className="scenario-stat"><span className="scenario-stat-label">Occupancy Cost</span><span className="scenario-stat-val">{formatCostBig(recommendedCost)}</span></div>
         </div>
         <div className="scenario-col active">
           <div className="scenario-col-label active-label">Your Scenario ({activeStyle} / {activeDensity})</div>
           <div className="scenario-stat"><span className="scenario-stat-label">Total RSF</span><span className="scenario-stat-val">{formatSF(scenario.totalRSF)}</span></div>
           <div className="scenario-stat"><span className="scenario-stat-label">Total USF</span><span className="scenario-stat-val">{formatSF(scenario.totalUSF)}</span></div>
           <div className="scenario-stat"><span className="scenario-stat-label">Desks</span><span className="scenario-stat-val">{formatNum(scenario.deskCount)}</span></div>
-          <div className="scenario-stat"><span className="scenario-stat-label">Annual Rent</span>
+          <div className="scenario-stat"><span className="scenario-stat-label">Occupancy Cost</span>
             <span className="scenario-stat-val" style={{ color: costDiff < 0 ? "#8bb87a" : costDiff > 0 ? "#b87a7a" : "#e8e4dc" }}>
               {costDiff !== 0 ? `${costDiff < 0 ? "-" : "+"}${formatCostBig(Math.abs(costDiff))}` : formatCostBig(scenarioCost)}
             </span>
@@ -1021,8 +1039,8 @@ function ComparisonBlock({ inputs, recommendedScenario, tacticalOpen, setTactica
       ? `You're carrying ${sfPct}% more space than you need`
       : `You're short ${Math.abs(sfPct)}% of the space you need`;
     const headlineSecondary = isOversized
-      ? `${formatCostBig(recommendedCost)}/yr · ${formatCostBig(costDelta)}/yr leaner than current`
-      : `${formatCostBig(recommendedCost)}/yr · ${formatCostBig(costDelta)}/yr more than current`;
+      ? `${formatCostBig(recommendedCost)}/yr occupancy cost · ${formatCostBig(costDelta)}/yr leaner than current`
+      : `${formatCostBig(recommendedCost)}/yr occupancy cost · ${formatCostBig(costDelta)}/yr more than current`;
     const baselineProg = computeProgram(inputs, inputs.workStyle, "Balanced");
     const tacticalChanges = computeTacticalChanges(baselineProg, recommendedProg, inputs.workStyle, recommendedScenario.style);
 
@@ -1031,7 +1049,13 @@ function ComparisonBlock({ inputs, recommendedScenario, tacticalOpen, setTactica
         <div className="comparison-label">Right-Sizing Audit</div>
         <div className="comparison-sublabel">{inputs.city} · {inputs.headcount} people · {formatNum(inputs.currentSF)} RSF current · {inputs.workStyle}</div>
         <div className="comparison-headline">{headlinePrimary}</div>
-        <div className="comparison-headline-savings">{headlineSecondary}</div>
+        <div className="comparison-headline-savings">
+          {headlineSecondary}
+          <span className="tooltip-wrap" style={{ marginLeft: 8 }}>
+            <span className="tooltip-icon" tabIndex={0} aria-label="What's included">?</span>
+            <span className="tooltip-content" role="tooltip">Year-one occupancy cost. Calculated as Total RSF × the blended Class A/B asking rate for the city (Q1 2026), sourced from CBRE, JLL, Cushman & Wakefield, Colliers, and CommercialCafe market reports. Typically includes: base rent, property taxes, building insurance, CAM, janitorial, and building utilities. Excludes: parking, tenant improvements, FF&E, brokerage, in-suite utilities above building standard, annual escalations (2.5–3.5%/yr typical), and OpEx pass-throughs after the base year. Directional only — actual lease economics vary with submarket, building class, lease term, abatements, and TI offsets. Expect ±15–25% variance vs. a brokered budget.</span>
+          </span>
+        </div>
         <EmbeddedSpaceBar program={recommendedProg} />
         <div className="comparison-grid">
           <div className="comparison-col">
@@ -1119,10 +1143,10 @@ function ComparisonBlock({ inputs, recommendedScenario, tacticalOpen, setTactica
   const naiveRSFPerPerson = Math.round(naiveProg.totalRSF / inputs.headcount);
   const headlinePrimary = `${inputs.headcount} people need ${formatNum(recommendedProg.totalRSF)} RSF`;
   const headlineSecondary = inputs.workStyle === "Assigned"
-    ? `${formatCostBig(recommendedCost)}/yr`
+    ? `${formatCostBig(recommendedCost)}/yr occupancy cost`
     : (rsfSavings > 0
-        ? `${formatCostBig(recommendedCost)}/yr · ${formatCostBig(costSavings)}/yr leaner than traditional 1:1 sizing`
-        : `${formatCostBig(recommendedCost)}/yr`);
+        ? `${formatCostBig(recommendedCost)}/yr occupancy cost · ${formatCostBig(costSavings)}/yr leaner than traditional 1:1 sizing`
+        : `${formatCostBig(recommendedCost)}/yr occupancy cost`);
   const baselineProg = computeProgram(inputs, inputs.workStyle, "Balanced");
   const tacticalChanges = computeTacticalChanges(baselineProg, recommendedProg, inputs.workStyle, recommendedScenario.style);
 
@@ -1144,7 +1168,15 @@ function ComparisonBlock({ inputs, recommendedScenario, tacticalOpen, setTactica
       <div className="comparison-label">Recommended Program</div>
       <div className="comparison-sublabel">{inputs.city} · {inputs.headcount} people · {inputs.workStyle}{inputs.workStyle !== "Assigned" && inputs.workStyle !== "Hoteling" ? ` · ${inputs.daysInOffice} days/week` : ""}{inputs.labUSF ? ` · ${formatNum(inputs.labUSF)} USF lab` : ""}</div>
       <div className="comparison-headline">{headlinePrimary}</div>
-      {headlineSecondary && <div className="comparison-headline-savings">{headlineSecondary}</div>}
+      {headlineSecondary && (
+        <div className="comparison-headline-savings">
+          {headlineSecondary}
+          <span className="tooltip-wrap" style={{ marginLeft: 8 }}>
+            <span className="tooltip-icon" tabIndex={0} aria-label="What's included">?</span>
+            <span className="tooltip-content" role="tooltip">Year-one occupancy cost. Calculated as Total RSF × the blended Class A/B asking rate for the city (Q1 2026), sourced from CBRE, JLL, Cushman & Wakefield, Colliers, and CommercialCafe market reports. Typically includes: base rent, property taxes, building insurance, CAM, janitorial, and building utilities. Excludes: parking, tenant improvements, FF&E, brokerage, in-suite utilities above building standard, annual escalations (2.5–3.5%/yr typical), and OpEx pass-throughs after the base year. Directional only — actual lease economics vary with submarket, building class, lease term, abatements, and TI offsets. Expect ±15–25% variance vs. a brokered budget.</span>
+          </span>
+        </div>
+      )}
       <EmbeddedSpaceBar program={recommendedProg} />
       {!userPickedAssigned && (
         <div className="comparison-grid">
@@ -1492,8 +1524,8 @@ export default function App() {
                 { label: "Total RSF", value: formatSF(currentProg.totalRSF), sub: `${formatNum(currentProg.totalUSF)} USF` },
                 { label: "Desk Count", value: formatNum(currentProg.deskCount), sub: inputs.headcount ? `of ${inputs.headcount} HC` : `~${effectiveHC} est. capacity` },
                 { label: "Meeting Rooms", value: formatNum(currentProg.meetingRooms), sub: `${currentProg.smallRooms}S · ${currentProg.medRooms}M · ${currentProg.largeRooms}L` },
-                { label: "Annual Rent Est.", value: formatCostBig(getAnnualCost(currentProg.totalRSF, inputs.city)), sub: "base rent on RSF",
-                  tooltip: "Base rent only. Calculated as Total RSF × the city's blended Class A/B asking rate (Q1 2026). Most leases are quoted in RSF. Excludes operating expenses, utilities, janitorial, IT, FF&E, tenant improvements, and brokerage fees. Add 30–50% for fully loaded occupancy cost." }
+                { label: "Annual Occupancy Cost", value: formatCostBig(getAnnualCost(currentProg.totalRSF, inputs.city)), sub: "full-service gross · yr 1",
+                  tooltip: "Year-one occupancy cost. Calculated as Total RSF × the blended Class A/B asking rate for the city (Q1 2026), sourced from CBRE, JLL, Cushman & Wakefield, Colliers, and CommercialCafe market reports. Typically includes: base rent, property taxes, building insurance, CAM, janitorial, and building utilities. Excludes: parking, tenant improvements, FF&E, brokerage, in-suite utilities above building standard, annual escalations (2.5–3.5%/yr typical), and OpEx pass-throughs after the base year. Directional only — actual lease economics vary with submarket, building class, lease term, abatements, and TI offsets. Expect ±15–25% variance vs. a brokered budget." }
               ].map((m, i) => (
                 <div key={i} className="metric-card">
                   <div className="metric-label">
@@ -1534,7 +1566,7 @@ export default function App() {
                   ...(inputs.hasLab && inputs.labUSF ? [["Lab USF", formatSF(inputs.labUSF)]] : []),
                   ["Total USF", formatSF(output.totalUSF)],
                   ["Total RSF", formatSF(output.totalRSF)],
-                  ["Annual Rent (RSF)", formatCostBig(getAnnualCost(output.totalRSF, inputs.city)) + "/yr"]
+                  ["Annual Occupancy Cost", formatCostBig(getAnnualCost(output.totalRSF, inputs.city)) + "/yr (full-service gross)"]
                 ].map(([l, v]) => (
                   <div key={l} className="summary-line">
                     <span>{l}</span><span>{v}</span>
@@ -1545,7 +1577,7 @@ export default function App() {
             </div>
 
             <div style={{ marginTop: 28, paddingTop: 20, borderTop: "1px solid #1e2022", fontSize: 11, color: "#4a4f48", lineHeight: 1.7, fontStyle: "italic" }}>
-              Cost estimates use blended Class A/B office rates from CBRE, JLL, Cushman &amp; Wakefield, Avison Young, and Colliers Q1 2026 market reports. Rates current as of {COST_DATA_AS_OF}, last verified {COST_VERIFIED_DATE}, applied to Total RSF. Actual lease economics vary by submarket, building class, lease term, and concessions. OptiSpace Lite provides directional analysis only — not a substitute for broker engagement, design programming, or detailed space planning.
+              Cost estimates use blended Class A/B full-service gross asking rates from CBRE, JLL, Cushman &amp; Wakefield, Avison Young, and Colliers Q1 2026 market reports. Full-service gross typically bundles base rent, property taxes, building insurance, CAM, janitorial, and building utilities. Rates current as of {COST_DATA_AS_OF}, last verified {COST_VERIFIED_DATE}, applied to Total RSF. Year-one cost only — excludes annual escalations (2.5–3.5%/yr typical), OpEx pass-throughs after the base year, parking, tenant improvements, FF&amp;E, and brokerage. Actual lease economics vary by submarket, building class, lease term, and concessions. OptiSpace Lite provides directional analysis only — not a substitute for broker engagement, design programming, or detailed space planning.
             </div>
           </div>
         )}
